@@ -1,0 +1,13 @@
+{
+  "about": "Brand marks and Holy Land photos for the Travel With Friends brochure template. The template's own pictures are links to files on the designer's PC and Dropbox, so a converted copy opens with empty picture frames. Each slot below names the frame by its position on the page (points). A frame is filled only when every edge is within 30 pt of the slot.",
+  "slots": [
+    {"name": "cover photo", "bounds": [528.0, -7.2, 800.4, 621.6], "file": "photos/holy-land/cover-jerusalem.jpg", "fit": "fillProportionally"},
+    {"name": "tour sun mark", "bounds": [540.2, 15.1, 622.8, 83.6], "file": "brand/twf-sun-yellow.png", "fit": "fitProportionally"},
+    {"name": "travel with friends logo", "bounds": [281.9, 26.0, 510.1, 146.5], "file": "brand/twf-logo.png", "fit": "fitProportionally"},
+    {"name": "facebook icon", "bounds": [285.9, 352.1, 319.0, 385.2], "file": "brand/facebook.png", "fit": "fitProportionally"},
+    {"name": "instagram icon", "bounds": [285.9, 394.2, 319.0, 427.4], "file": "brand/instagram.png", "fit": "fitProportionally"},
+    {"name": "page 2 photo, top", "bounds": [0.0, 0.0, 264.0, 204.0], "file": "photos/holy-land/page2-top.jpg", "fit": "fillProportionally"},
+    {"name": "page 2 photo, middle", "bounds": [0.0, 204.0, 132.0, 408.0], "file": "photos/holy-land/page2-middle.jpg", "fit": "fillProportionally"},
+    {"name": "page 2 photo, bottom", "bounds": [132.0, 408.0, 264.0, 612.0], "file": "photos/holy-land/page2-bottom.jpg", "fit": "fillProportionally"}
+  ]
+}

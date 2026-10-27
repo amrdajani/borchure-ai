@@ -1,0 +1,27 @@
+.env
+.venv/
+.venv312/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+output/**
+!output/.gitkeep
+logs/**
+!logs/.gitkeep
+previews/**
+!previews/.gitkeep
+.tools/
+.scratch/
+
+# templates added through the API
+templates/saved/**
+!templates/saved/.gitkeep
+
+# Railway volume contents, if a deploy is tried from a mounted disk
+/data/

@@ -1,0 +1,8 @@
+typesafe-sdk
+pydantic>=2
+python-dotenv
+pymupdf
+python-docx
+Pillow
+pytesseract
+pytest
