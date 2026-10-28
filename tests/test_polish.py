@@ -99,6 +99,22 @@ def test_flattened_host_panel_gets_a_title_bold_lines_and_yellow_payments(tmp_pa
     assert spacing[:5] == [12, 12, 12, 0, 0]
 
 
+def test_roundtrip_is_removed_and_the_airfare_line_stays(tmp_path):
+    bar = [613.8, 515.4, 800.4, 543.0]
+    client = FakeDesignCraft(
+        {55: "ROUNDTRIP", 104: "AIRFARE FROM SALT LAKE CITY"},
+        [
+            _text_frame(125, 55, [619.4, 516.0, 790.0, 526.0]),
+            _text_frame(126, 104, [619.4, 528.2, 790.0, 539.5]),
+            _bar(bar),
+        ],
+    )
+    notes = polish_document(client, _plan({"role": "airfare", "text": "AIRFARE FROM SALT LAKE CITY"}), assets_dir=tmp_path)
+    assert client.texts[55] == ""
+    assert client.texts[104] == "AIRFARE FROM SALT LAKE CITY"
+    assert "removed roundtrip" in notes
+
+
 def test_bar_text_is_caps_left_aligned_and_centred_inside_the_bar(tmp_path):
     bar = [613.8, 515.4, 800.4, 543.0]
     client = FakeDesignCraft(

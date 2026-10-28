@@ -30,6 +30,7 @@ BODY = {"fontFamily": "Montserrat", "fontStyle": "Bold", "size": 11, "fill": "[P
 BAR_TEXT = {"fontFamily": "Montserrat", "fontStyle": "Bold", "size": 11, "fill": "[Black]", "capitalization": "allCaps", "tracking": 0}
 
 _PAYMENT = re.compile(r"^(first|final)\s+payment|^deadline", re.I)
+_ROUNDTRIP = re.compile(r"^round\s*trip$", re.I)
 
 
 # The cover's "Ready to Register?" code. The page-2 code (terms and conditions) is elsewhere and stays.
@@ -47,6 +48,7 @@ def polish_document(
     """Run each step on its own. A step that fails is reported and skipped."""
     notes: list[str] = []
     steps: list[tuple[str, Callable[[_Doc], list[str]]]] = [
+        ("roundtrip", lambda doc: _drop_roundtrip(doc)),
         ("host panel", lambda doc: _host_panel(doc)),
         ("price bars", lambda doc: _bars(doc, plan)),
         ("cover line", lambda doc: _cover_line(doc, plan)),
@@ -130,6 +132,24 @@ def _lines_with_offsets(text: str) -> list[tuple[str, int, int]]:
         rows.append((line, offset, offset + size))
         offset += size + 1
     return rows
+
+
+def _drop_roundtrip(doc: _Doc) -> list[str]:
+    """The yellow airfare bar has a 'ROUNDTRIP' line the brochure should not show."""
+    notes: list[str] = []
+    for story in doc.stories():
+        story_id = int(story["id"])
+        raw = str(doc.story(story_id).get("text") or story.get("preview") or "")
+        lines = [line.strip() for line in raw.replace("\u2028", "\n").split("\n")]
+        words = [line for line in lines if line]
+        if len(words) == 1 and _ROUNDTRIP.match(words[0]):
+            doc.run("story.setText", {"story": story_id, "text": ""})
+            notes.append("removed roundtrip")
+            continue
+        if words and _ROUNDTRIP.match(words[0]) and any("airfare" in line.lower() for line in words[1:]):
+            doc.run("story.setText", {"story": story_id, "text": "\n".join(words[1:])})
+            notes.append("removed roundtrip")
+    return notes
 
 
 def _host_panel(doc: _Doc) -> list[str]:

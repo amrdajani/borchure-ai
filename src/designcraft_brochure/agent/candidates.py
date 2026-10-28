@@ -248,6 +248,8 @@ def _tour_code_story(story: StoryView) -> bool:
 def _already_applied(story: StoryView, text: str) -> bool:
     current = _plain(story)
     wanted = " ".join(text.split())
+    if re.search(r"round\s*trip", current, re.I) and not re.search(r"round\s*trip", wanted, re.I):
+        return False
     if current == wanted:
         return True
     lines = [line.strip() for line in text.split("\n") if line.strip()]
