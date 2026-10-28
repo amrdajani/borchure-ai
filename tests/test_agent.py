@@ -199,6 +199,85 @@ def test_indd_templates_are_not_offered(tmp_path):
     assert ".indd" in outcome.message
 
 
+def test_an_open_template_is_exported_when_no_story_matches(tmp_path):
+    root = tmp_path / "templates"
+    template = root / "travel" / "many.idml"
+    _write_many_stories(template, [f"Section {index}" for index in range(1, 10)])
+    proposal = tmp_path / "proposal.txt"
+    proposal.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+    prepared = prepare_run(
+        proposal_path=proposal,
+        template_root=root,
+        output_dir=tmp_path / "output",
+        preview_dir=tmp_path / "previews",
+        log_dir=tmp_path / "logs",
+        brain=CallbackBrain(answering_brain),
+        settings=Settings(),
+        overwrite=False,
+        backend="simulated",
+        ocr=False,
+        progress=Progress(),
+    )
+    assert not isinstance(prepared, RunOutcome)
+    outcome = run_loop(prepared, CallbackBrain(_stare_or_open), SimulatedSession(), Settings(), Progress())
+    assert outcome.status == "completed", outcome.message
+    assert outcome.pdf_path
+    assert Path(outcome.pdf_path).is_file()
+    journal = (tmp_path / "logs" / "actions.jsonl").read_text(encoding="utf-8")
+    assert journal.count("inspect_document") < 4
+
+
+def _stare_or_open(state, questions):
+    from designcraft_brochure.jev.brain import scripted_judgment
+
+    choices: dict[str, str] = {}
+    nouls: dict[str, float] = {}
+    if "next_action" in questions:
+        criteria = questions["next_action"]["criteria"]
+        choices["next_action"] = "open_working" if "open_working" in criteria else "inspect_document"
+        if choices["next_action"] not in criteria:
+            choices["next_action"] = next(iter(criteria))
+        nouls["screen_understood"] = 0.95
+        nouls["task_complete"] = 0.05
+    if "safe_to_run" in questions:
+        nouls["safe_to_run"] = 0.96
+    if "effect_happened" in questions:
+        nouls["effect_happened"] = 0.96
+    return scripted_judgment(questions, choices=choices, nouls=nouls)
+
+
+def _write_many_stories(path: Path, stories: list[str]) -> None:
+    import zipfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    story_tags = "\n".join(
+        f'  <idPkg:Story src="Stories/Story_t{index}.xml"/>' for index, _text in enumerate(stories, start=1)
+    )
+    designmap = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="8.0">
+  <idPkg:Spread src="Spreads/Spread_s1.xml"/>
+{story_tags}
+</Document>
+"""
+    spread = """<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="8.0">
+  <Spread Self="s1"><Page Self="p1"/></Spread>
+</idPkg:Spread>
+"""
+    with zipfile.ZipFile(path, "w") as package:
+        package.writestr("designmap.xml", designmap)
+        package.writestr("Spreads/Spread_s1.xml", spread)
+        for index, text in enumerate(stories, start=1):
+            package.writestr(
+                f"Stories/Story_t{index}.xml",
+                f"""<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="8.0">
+  <Story Self="t{index}"><Content>{text}</Content></Story>
+</idPkg:Story>
+""",
+            )
+
+
 def test_a_typed_tour_code_replaces_the_blank_bar_and_wins_over_the_proposal():
     assert tour_code_line("no code here") == "Tour Code:"
     assert tour_code_line("no code here", " hlmrs426 ") == "Tour Code: HLMRS426"

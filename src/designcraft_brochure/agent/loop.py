@@ -10,7 +10,7 @@ from designcraft_brochure.agent.policy import allowed
 from designcraft_brochure.config import Settings
 from designcraft_brochure.craft.session import LiveSession, SimulatedSession
 from designcraft_brochure.craft.validate import CommandContext, validate_action
-from designcraft_brochure.jev.brain import Brain, BrainError
+from designcraft_brochure.jev.brain import Brain, BrainError, Judgment
 from designcraft_brochure.jev.questions import action_questions, safety_questions, verify_questions
 from designcraft_brochure.journal import append_journal, public_history_item, save_checkpoint
 from designcraft_brochure.models import (
@@ -82,6 +82,10 @@ def run_loop(
                 return outcome
             observation = session.inspect()
             quality = _quality(context)
+            if _finished(context, quality):
+                _checkpoint(context)
+                outcome = _outcome(context, session, "completed", _completed_message(context, session))
+                return outcome
             candidates = build_candidates(
                 observation,
                 context.plan,
@@ -92,54 +96,36 @@ def run_loop(
                 preview_path=context.preview_dir / "page-render.png",
                 overwrite=context.overwrite_confirmed,
             )
-            try:
-                judgment = brain.judge(
-                    _decision_state(context, observation, quality),
-                    action_questions(candidates),
+            forced = _export_without_asking(candidates, observation)
+            if forced is not None:
+                action = forced
+                confidence = 1.0
+                judgment = Judgment("brochure-api", {}, {})
+                progress.say(f"Nothing left to edit. Continuing with {action.id}.")
+            else:
+                chosen = _choose_action(
+                    brain, context, session, observation, quality, candidates, settings, progress
                 )
-            except BrainError as exc:
-                _checkpoint(context)
-                outcome = _outcome(context, session, "failed", str(exc))
-                return outcome
-            except KeyboardInterrupt:
-                _checkpoint(context)
-                outcome = _outcome(context, session, "stopped", "Stopped by the operator.")
-                return outcome
-            selected = judgment.choice("next_action").choice
-            action = next((item for item in candidates if item.id == selected), None)
-            if action is None:
-                outcome = _outcome(context, session, "needs_assistance", "Jev selected an action that was not offered.")
-                return outcome
-            confidence = judgment.choice("next_action").confidence
-            progress.say(f"Jev chose {action.id} (confidence {confidence:.2f}).")
-            if action.id == "request_human":
-                finish = _pending_finish(candidates, context, settings)
-                if finish is None:
-                    _checkpoint(context)
+                if isinstance(chosen, RunOutcome):
+                    outcome = chosen
+                    return outcome
+                action, confidence, judgment = chosen
+                if action.id == "stop_agent" or judgment.noul("task_complete") >= settings.task_complete_noul:
                     if _finished(context, quality):
+                        _checkpoint(context)
                         outcome = _outcome(context, session, "completed", _completed_message(context, session))
                         return outcome
-                    outcome = _outcome(context, session, "needs_assistance", "Jev asked for a person.")
-                    return outcome
-                progress.say(f"Jev asked for a person. Continuing with {finish.id}.")
-                action = finish
-            finished = _finished(context, quality)
-            if action.id == "stop_agent" or judgment.noul("task_complete") >= settings.task_complete_noul:
-                if finished:
-                    _checkpoint(context)
-                    outcome = _outcome(context, session, "completed", _completed_message(context, session))
-                    return outcome
-                stop_rejections += 1
-                if stop_rejections >= 2:
-                    _checkpoint(context)
-                    outcome = _outcome(
-                        context,
-                        session,
-                        "needs_assistance",
-                        "Jev tried to stop before the PDF passed inspection and the native file was saved.",
-                    )
-                    return outcome
-                continue
+                    stop_rejections += 1
+                    if stop_rejections >= 2:
+                        _checkpoint(context)
+                        outcome = _outcome(
+                            context,
+                            session,
+                            "needs_assistance",
+                            "Jev tried to stop before the PDF passed inspection and the native file was saved.",
+                        )
+                        return outcome
+                    continue
             if context.failures.get(action.id, 0) >= settings.retry_limit:
                 _checkpoint(context)
                 outcome = _outcome(context, session, "needs_assistance", f"{action.id} failed the retry limit.")
@@ -148,14 +134,16 @@ def run_loop(
                 outcome = _outcome(context, session, "failed", "The original template changed. Stopping.")
                 return outcome
             try:
-                reason = _safety_reason(
-                    brain,
-                    action,
-                    observation,
-                    confidence,
-                    judgment.noul("screen_understood"),
-                    settings,
-                )
+                reason = None
+                if forced is None:
+                    reason = _safety_reason(
+                        brain,
+                        action,
+                        observation,
+                        confidence,
+                        judgment.noul("screen_understood"),
+                        settings,
+                    )
                 validate_action(action, _command_context(context, observation))
             except (SafetyError, BrainError) as exc:
                 _reject(context, action, exc.__class__.__name__)
@@ -187,21 +175,23 @@ def run_loop(
             context.action_count += 1
             after = session.inspect()
             local_ok, detail = _local_effect(action, observation, after, context)
-            try:
-                verified = brain.judge(
-                    {
-                        "before": observation.summary(),
-                        "after": after.summary(),
-                        "intended_effect": action.description,
-                        "local_evidence": local_ok,
-                    },
-                    verify_questions(action.description),
-                )
-                verify_noul = verified.noul("effect_happened")
-            except BrainError as exc:
-                _checkpoint(context)
-                outcome = _outcome(context, session, "failed", str(exc))
-                return outcome
+            verify_noul = 1.0 if forced is not None else 0.0
+            if forced is None:
+                try:
+                    verified = brain.judge(
+                        {
+                            "before": observation.summary(),
+                            "after": after.summary(),
+                            "intended_effect": action.description,
+                            "local_evidence": local_ok,
+                        },
+                        verify_questions(action.description),
+                    )
+                    verify_noul = verified.noul("effect_happened")
+                except BrainError as exc:
+                    _checkpoint(context)
+                    outcome = _outcome(context, session, "failed", str(exc))
+                    return outcome
             if local_ok is False:
                 ok = False
             elif local_ok is True and (action.risk == "low" or action.id in _FINISH_ACTIONS):
@@ -214,7 +204,12 @@ def run_loop(
             _journal(context, action, ok, judgment.model)
             _checkpoint(context)
             if len(context.history) >= 4 and all(item["action"] in _OBSERVE_ONLY for item in context.history[-4:]):
-                outcome = _outcome(context, session, "needs_assistance", "The last actions did not change the document.")
+                outcome = _outcome(
+                    context,
+                    session,
+                    "needs_assistance",
+                    "The last actions did not change the document.",
+                )
                 return outcome
         _checkpoint(context)
         outcome = _outcome(context, session, "needs_assistance", "Stopped at the maximum action count.")
@@ -226,6 +221,60 @@ def run_loop(
             outcome.native_path = str(context.native_path) if context.native_path.is_file() else outcome.native_path
             outcome.idml_path = str(context.idml_export_path) if context.idml_export_path.is_file() else None
         session.close()
+
+
+def _export_without_asking(candidates: list[CandidateAction], observation: Observation) -> CandidateAction | None:
+    """Save and export once no story still has a replacement waiting."""
+    if not observation.document_open:
+        return None
+    if any(item.id.startswith("fill_story_") for item in candidates):
+        return None
+    by_id = {item.id: item for item in candidates}
+    for action_id in _FINISH_ACTIONS:
+        action = by_id.get(action_id)
+        if action is not None:
+            return action
+    return None
+
+
+def _choose_action(
+    brain: Brain,
+    context: RunContext,
+    session: SimulatedSession | LiveSession,
+    observation: Observation,
+    quality: QualityReport | None,
+    candidates: list[CandidateAction],
+    settings: Settings,
+    progress: Progress,
+) -> tuple[CandidateAction, float, Judgment] | RunOutcome:
+    try:
+        judgment = brain.judge(
+            _decision_state(context, observation, quality),
+            action_questions(candidates),
+        )
+    except BrainError as exc:
+        _checkpoint(context)
+        return _outcome(context, session, "failed", str(exc))
+    except KeyboardInterrupt:
+        _checkpoint(context)
+        return _outcome(context, session, "stopped", "Stopped by the operator.")
+    selected = judgment.choice("next_action").choice
+    action = next((item for item in candidates if item.id == selected), None)
+    if action is None:
+        _checkpoint(context)
+        return _outcome(context, session, "needs_assistance", "Jev selected an action that was not offered.")
+    confidence = judgment.choice("next_action").confidence
+    progress.say(f"Jev chose {action.id} (confidence {confidence:.2f}).")
+    if action.id != "request_human":
+        return action, confidence, judgment
+    finish = _pending_finish(candidates, context, settings)
+    if finish is None:
+        _checkpoint(context)
+        if _finished(context, quality):
+            return _outcome(context, session, "completed", _completed_message(context, session))
+        return _outcome(context, session, "needs_assistance", "Jev asked for a person.")
+    progress.say(f"Jev asked for a person. Continuing with {finish.id}.")
+    return finish, confidence, judgment
 
 
 def _polish(context: RunContext, session: SimulatedSession | LiveSession, progress: Progress) -> None:
