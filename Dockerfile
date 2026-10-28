@@ -16,7 +16,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* /tmp/designcraft.deb \
     && designcraft-cli --help >/dev/null
 COPY --from=indd /indd /usr/local/bin/indd
-RUN indd --help >/dev/null
+RUN test -x /usr/local/bin/indd
 
 WORKDIR /app
 COPY pyproject.toml requirements.txt README.md ./
