@@ -1,3 +1,11 @@
+FROM rust:1-bookworm AS indd
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth 1 https://github.com/storytold/indd-utils.git /src \
+    && cargo build --release --manifest-path /src/Cargo.toml \
+    && cp /src/target/release/indd /indd
+
 FROM python:3.12-slim-bookworm
 
 RUN apt-get update \
@@ -7,6 +15,8 @@ RUN apt-get update \
     && apt-get install -y /tmp/designcraft.deb \
     && rm -rf /var/lib/apt/lists/* /tmp/designcraft.deb \
     && designcraft-cli --help >/dev/null
+COPY --from=indd /indd /usr/local/bin/indd
+RUN indd --help >/dev/null
 
 WORKDIR /app
 COPY pyproject.toml requirements.txt README.md ./
