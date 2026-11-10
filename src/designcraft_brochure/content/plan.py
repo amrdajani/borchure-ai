@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from designcraft_brochure.config import Settings
 from designcraft_brochure.content.anthropic import messages as anthropic_messages
@@ -37,6 +37,7 @@ class ConfirmedFacts:
     host_email: str = ""
     cover_image: str = ""
     logo_image: str = ""
+    gallery_images: list[str] = field(default_factory=list)
 
 
 def build_plan(
@@ -124,6 +125,8 @@ def apply_confirmed(plan: BrochurePlan, source: str, facts: ConfirmedFacts) -> B
         plan.cover_image = facts.cover_image
     if facts.logo_image:
         plan.logo_image = facts.logo_image
+    if facts.gallery_images:
+        plan.gallery_images = [path for path in facts.gallery_images if path]
     return plan
 
 

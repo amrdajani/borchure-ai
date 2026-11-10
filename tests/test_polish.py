@@ -171,6 +171,30 @@ def test_a_confirmed_cover_title_and_pictures_land_on_the_cover(tmp_path):
     assert placed == {7: "cover.png", 8: "logo.png"}
 
 
+def test_extra_photos_fill_the_remaining_picture_frames(tmp_path):
+    (tmp_path / "cover.png").write_bytes(b"png")
+    (tmp_path / "one.jpeg").write_bytes(b"jpg")
+    (tmp_path / "two.jpeg").write_bytes(b"jpg")
+    client = FakeDesignCraft(
+        {},
+        [
+            {"id": 7, "kind": "<image>", "bounds": [528, -7, 800, 622]},
+            {"id": 8, "kind": "<image>", "bounds": [40, 40, 360, 280]},
+            {"id": 9, "kind": "<image>", "bounds": [400, 40, 760, 280]},
+            {"id": 10, "kind": "<image>", "bounds": [0, 0, 20, 20]},
+        ],
+    )
+    plan = _plan()
+    plan.cover_image = str(tmp_path / "cover.png")
+    plan.gallery_images = [str(tmp_path / "one.jpeg"), str(tmp_path / "two.jpeg")]
+    notes = polish_document(client, plan, assets_dir=tmp_path)
+    placed = {inner["frame"]: Path(inner["path"]).name for inner in client.commands("file.place")}
+    assert placed[7] == "cover.png"
+    assert set(placed) == {7, 8, 9}
+    assert "placed photo" in notes
+    assert 10 not in placed
+
+
 def test_cover_line_names_the_host_from_the_approved_host_line(tmp_path):
     client = FakeDesignCraft(
         {100: "JOIN \nEvangelists \nROBBY & TRACEY MITCHELL IN"},

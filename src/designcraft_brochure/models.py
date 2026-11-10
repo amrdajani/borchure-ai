@@ -53,6 +53,7 @@ class BrochurePlan(BaseModel):
     cover_title: str = ""
     cover_image: str = ""
     logo_image: str = ""
+    gallery_images: list[str] = Field(default_factory=list)
 
 
 class TemplateInfo(BaseModel):

@@ -198,8 +198,11 @@ class BrochureAPI:
         files = parts.files
         tour_code = _read_tour_code(parts.fields.get("tour_code"))
         facts = _read_facts(parts.fields)
-        for field in ("cover", "logo"):
-            _check_image(files.get(field), field)
+        for field_name in ("cover", "logo"):
+            _check_image(files.get(field_name), field_name)
+        photos = [item for item in parts.images if item.field == "photo"][:24]
+        for photo in photos:
+            _check_image(photo, "photo")
         proposal = _required_file(files, "proposal", PROPOSAL_SUFFIXES)
         template = self._template_for_run(files, parts.fields.get("template_id"))
         if not self._lock.acquire(blocking=False):
@@ -208,7 +211,7 @@ class BrochureAPI:
         try:
             job = _prepare_job(self.jobs_root, job_id, proposal, template)
             job.tour_code = tour_code
-            job.facts = _store_chosen_images(job.root, facts, files)
+            job.facts = _store_chosen_images(job.root, facts, files, photos)
             outcome = self.runner(job, self.settings, self.backend)
         except ApiError:
             raise
@@ -783,7 +786,7 @@ def parse_multipart(content_type: str, body: bytes) -> FormParts:
         if not field:
             continue
         uploaded = UploadedFile(field=field, filename=filename, data=data)
-        if field == "image":
+        if field in {"image", "photo"}:
             images.append(uploaded)
             continue
         files[field] = uploaded
@@ -1013,14 +1016,22 @@ def _check_image(uploaded: UploadedFile | None, field: str) -> None:
     _safe_filename(uploaded.filename, IMAGE_SUFFIXES)
 
 
-def _store_chosen_images(root: Path, facts: ConfirmedFacts, files: dict[str, UploadedFile]) -> ConfirmedFacts:
-    updates: dict[str, str] = {}
+def _store_chosen_images(
+    root: Path,
+    facts: ConfirmedFacts,
+    files: dict[str, UploadedFile],
+    photos: list[UploadedFile] | None = None,
+) -> ConfirmedFacts:
+    updates: dict[str, str | list[str]] = {}
     cover = files.get("cover")
     logo = files.get("logo")
     if cover is not None:
         updates["cover_image"] = _store_named_image(root, cover)
     if logo is not None:
         updates["logo_image"] = _store_named_image(root, logo)
+    gallery = [_store_named_image(root, photo) for photo in photos or [] if photo.data]
+    if gallery:
+        updates["gallery_images"] = gallery
     return replace(facts, **updates) if updates else facts
 
 

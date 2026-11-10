@@ -389,6 +389,21 @@ def _place_uploads(doc: _Doc, plan: BrochurePlan, assets_dir: Path | None) -> li
         doc.run("object.fit", {"mode": mode, "ids": [frame_id]})
         used.add(frame_id)
         notes.append("placed cover photo" if kind == "cover" else "placed logo")
+    for path in plan.gallery_images:
+        photo = Path(path)
+        if not photo.is_file():
+            continue
+        open_frames = [
+            item for item in frames if item["id"] not in used and _frame_area(item) >= 100 * 100
+        ]
+        if not open_frames:
+            break
+        frame = max(open_frames, key=_frame_area)
+        frame_id = int(frame["id"])
+        doc.run("file.place", {"path": str(photo.resolve()), "frame": frame_id})
+        doc.run("object.fit", {"mode": "fillProportionally", "ids": [frame_id]})
+        used.add(frame_id)
+        notes.append("placed photo")
     return notes
 
 
