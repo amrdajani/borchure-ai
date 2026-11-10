@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 
 from designcraft_brochure.config import Settings
 from designcraft_brochure.content.anthropic import messages as anthropic_messages
@@ -19,12 +20,32 @@ from designcraft_brochure.models import BrochurePlan, CopyBlock, Proposal, Templ
 from designcraft_brochure.safety import clean_typed_text, is_suspicious, unsupported_facts
 
 
+@dataclass
+class ConfirmedFacts:
+    """Answers the person confirmed. Empty fields stay on the proposal."""
+
+    cover_title: str = ""
+    total: str = ""
+    deposit: str = ""
+    trip_start: str = ""
+    trip_end: str = ""
+    first_payment: str = ""
+    final_payment: str = ""
+    deadline: str = ""
+    host_name: str = ""
+    host_phone: str = ""
+    host_email: str = ""
+    cover_image: str = ""
+    logo_image: str = ""
+
+
 def build_plan(
     proposal: Proposal,
     template: TemplateInfo,
     brain: Brain,
     settings: Settings,
     tour_code: str | None = None,
+    facts: ConfirmedFacts | None = None,
 ) -> BrochurePlan:
     drafted = []
     seen: set[str] = set()
@@ -79,12 +100,228 @@ def build_plan(
     missing = list(proposal.missing)
     if not kept:
         missing.append("No source-backed brochure text was available.")
-    return BrochurePlan(
+    plan = BrochurePlan(
         template_id=template.id,
         blocks=kept,
         image_paths=list(proposal.images),
         missing_information=_unique(missing),
     )
+    if facts is not None:
+        apply_confirmed(plan, proposal.raw_text, facts)
+    return plan
+
+
+def apply_confirmed(plan: BrochurePlan, source: str, facts: ConfirmedFacts) -> BrochurePlan:
+    """Prefer a confirmed answer over the same fact read from the proposal."""
+    plan.blocks = _apply_prices(plan.blocks, facts)
+    plan.blocks = _apply_host(plan.blocks, source, facts)
+    plan.blocks = _apply_trip(plan.blocks, facts)
+    plan.blocks = _apply_payment_dates(plan.blocks, facts)
+    title = " ".join(facts.cover_title.split())
+    if title:
+        plan.cover_title = title
+    if facts.cover_image:
+        plan.cover_image = facts.cover_image
+    if facts.logo_image:
+        plan.logo_image = facts.logo_image
+    return plan
+
+
+def _price_block(block_id: str, text: str) -> CopyBlock:
+    return CopyBlock(id=block_id, role="price", text=text, source_backed=True)
+
+
+def _money_amount(text: str) -> float:
+    digits = re.sub(r"[^\d.]", "", text)
+    try:
+        return float(digits) if digits else 0
+    except ValueError:
+        return 0
+
+
+def _apply_prices(blocks: list[CopyBlock], facts: ConfirmedFacts) -> list[CopyBlock]:
+    total = facts.total.strip()
+    deposit = facts.deposit.strip()
+    if not total and not deposit:
+        return blocks
+    prices = [block for block in blocks if block.role == "price"]
+    others = [block for block in blocks if block.role != "price"]
+    if total and deposit:
+        chosen = [_price_block("confirmed_total", total)]
+        if deposit != "none":
+            chosen.append(_price_block("confirmed_deposit", deposit))
+        return others + chosen
+    if total:
+        if not prices:
+            return others + [_price_block("confirmed_total", total)]
+        ranked = sorted(prices, key=lambda block: _money_amount(block.text), reverse=True)
+        ranked[0] = _price_block("confirmed_total", total)
+        return others + ranked
+    if deposit == "none":
+        if not prices:
+            return others
+        largest = max(prices, key=lambda block: _money_amount(block.text))
+        return others + [largest]
+    if not prices:
+        return others + [_price_block("confirmed_deposit", deposit)]
+    ranked = sorted(prices, key=lambda block: _money_amount(block.text))
+    ranked[0] = _price_block("confirmed_deposit", deposit)
+    return others + ranked
+
+
+_MONTH_NAMES = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def _iso_parts(iso: str) -> tuple[int, int, int] | None:
+    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", iso.strip())
+    if match is None:
+        return None
+    year, month, day = (int(part) for part in match.groups())
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    return year, month, day
+
+
+def written_date(iso: str) -> str | None:
+    """2027-07-01 becomes July 1, 2027. Anything else is left unused."""
+    parts = _iso_parts(iso)
+    if parts is None:
+        return None
+    year, month, day = parts
+    return f"{_MONTH_NAMES[month - 1]} {day}, {year}"
+
+
+def trip_bar(start: str, end: str) -> str | None:
+    """Two ISO dates become the yellow-bar form, like NOV 10-19, 2027."""
+    left = _iso_parts(start)
+    right = _iso_parts(end)
+    if left is None or right is None:
+        return None
+    y1, m1, d1 = left
+    y2, m2, d2 = right
+    if y1 == y2 and m1 == m2:
+        text = f"{_MONTH_NAMES[m1 - 1]} {d1}-{d2}, {y1}"
+    elif y1 == y2:
+        text = f"{_MONTH_NAMES[m1 - 1]} {d1}-{_MONTH_NAMES[m2 - 1]} {d2}, {y1}"
+    else:
+        text = f"{_MONTH_NAMES[m1 - 1]} {d1}, {y1} to {_MONTH_NAMES[m2 - 1]} {d2}, {y2}"
+    return format_trip_date(text) or text
+
+
+def _apply_trip(blocks: list[CopyBlock], facts: ConfirmedFacts) -> list[CopyBlock]:
+    if not facts.trip_start.strip() or not facts.trip_end.strip():
+        return blocks
+    line = trip_bar(facts.trip_start, facts.trip_end)
+    if not line:
+        return blocks
+    others = [block for block in blocks if block.role != "trip_date"]
+    others.append(CopyBlock(id="trip_date_0", role="trip_date", text=line, source_backed=True))
+    return others
+
+
+def _apply_payment_dates(blocks: list[CopyBlock], facts: ConfirmedFacts) -> list[CopyBlock]:
+    singles: list[str] = []
+    for value in (facts.first_payment, facts.final_payment):
+        written = written_date(value.strip()) if value.strip() else None
+        if written and written not in singles:
+            singles.append(written)
+    if not singles:
+        return blocks
+    kept = [block for block in blocks if block.role != "date" or format_trip_date(block.text)]
+    for index, text in enumerate(singles):
+        kept.append(CopyBlock(id=f"date_confirmed_{index}", role="date", text=text, source_backed=True))
+    return kept
+
+
+def _parse_host(lines: list[str]) -> dict[str, str]:
+    fields = {"name": "", "phone": "", "email": "", "first": "", "final": "", "deadline": ""}
+    for raw in lines:
+        line = raw.strip()
+        lower = line.lower()
+        if lower.startswith("host:"):
+            fields["name"] = line.split(":", 1)[1].strip()
+        elif lower.startswith("phone:"):
+            fields["phone"] = line.split(":", 1)[1].strip()
+        elif lower.startswith("email:"):
+            fields["email"] = line.split(":", 1)[1].strip()
+        elif lower.startswith("first payment:"):
+            fields["first"] = line.split(":", 1)[1].strip()
+        elif lower.startswith("final payment:"):
+            fields["final"] = line.split(":", 1)[1].strip()
+        elif lower.startswith("deadline:"):
+            fields["deadline"] = line.split(":", 1)[1].strip()
+    return fields
+
+
+def _host_label(name: str, source: str) -> str:
+    host = " ".join(name.split())
+    if re.search(rf"\bPastor\s+{re.escape(host)}\b", _clean(source), re.I) and not host.lower().startswith("pastor"):
+        host = f"Pastor {host}"
+    return host.upper()
+
+
+def _render_host(fields: dict[str, str]) -> list[str]:
+    if not any(fields.values()):
+        return []
+    lines = ["CONTACT INFO"]
+    if fields["name"]:
+        lines.append(f"HOST: {fields['name']}")
+    if fields["phone"]:
+        lines.append(f"PHONE: {fields['phone']}")
+    if fields["email"]:
+        lines.append(f"EMAIL: {fields['email']}")
+    if fields["first"]:
+        lines.append(f"FIRST PAYMENT: {fields['first']}")
+    if fields["final"]:
+        lines.append(f"FINAL PAYMENT: {fields['final']}")
+    if fields["deadline"]:
+        lines.append(f"DEADLINE: {fields['deadline']}")
+    return lines
+
+
+def _apply_host(blocks: list[CopyBlock], source: str, facts: ConfirmedFacts) -> list[CopyBlock]:
+    touched = any(
+        getattr(facts, name).strip()
+        for name in ("host_name", "host_phone", "host_email", "first_payment", "final_payment", "deadline")
+    )
+    if not touched:
+        return blocks
+    existing = [block.text for block in blocks if block.role == "host_panel"] or host_panel_lines(source)
+    fields = _parse_host(existing)
+    if facts.host_name.strip():
+        fields["name"] = _host_label(facts.host_name, source)
+    if facts.host_phone.strip():
+        fields["phone"] = " ".join(facts.host_phone.split())
+    if facts.host_email.strip():
+        fields["email"] = facts.host_email.strip()
+    if facts.first_payment.strip():
+        fields["first"] = written_date(facts.first_payment) or fields["first"]
+    if facts.final_payment.strip():
+        fields["final"] = written_date(facts.final_payment) or fields["final"]
+    if facts.deadline.strip():
+        written = written_date(facts.deadline) or ""
+        fields["deadline"] = "" if written and written == fields["final"] else written
+    lines = _render_host(fields)
+    if not lines:
+        return blocks
+    others = [block for block in blocks if block.role != "host_panel"]
+    return others + [
+        CopyBlock(id=f"host_panel_{index}", role="host_panel", text=line, source_backed=True)
+        for index, line in enumerate(lines)
+    ]
 
 
 def _draft_blocks(proposal: Proposal, settings: Settings) -> list[CopyBlock]:

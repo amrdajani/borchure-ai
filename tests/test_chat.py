@@ -192,6 +192,59 @@ def test_chat_edits_update_the_files_and_undo_goes_back(tmp_path):
     assert reply["changed"] is False and "nothing to undo" in reply["reply"].lower()
 
 
+def test_layout_lists_pieces_and_a_move_saves_a_new_version(tmp_path):
+    from designcraft_brochure.api import BrochureAPI, ChatOutcome
+
+    moved: dict = {}
+
+    def layout_runner(source, _settings, _backend):
+        assert source.is_file()
+        return SNAPSHOT
+
+    def move_runner(_source, revision_dir, _settings, _backend, frame, dx, dy):
+        if abs(dx) > 200 or abs(dy) > 200:
+            return ChatOutcome(reply="I can move things up to 200 points at a time.")
+        moved.update(frame=frame, dx=dx, dy=dy)
+        revision_dir.mkdir(parents=True, exist_ok=True)
+        pdf = revision_dir / "brochure.pdf"
+        pdf.write_bytes(b"%PDF-1.4 moved")
+        return ChatOutcome(reply="Moved.", changed=True, pdf_path=str(pdf), notes=["moved"])
+
+    api = BrochureAPI(
+        tmp_path / "jobs",
+        Settings(typesafe_api_key="k"),
+        runner=lambda job, *_: _outcome(job.root),
+        chat_runner=lambda *_: ChatOutcome(reply="x"),
+        layout_runner=layout_runner,
+        move_runner=move_runner,
+        designcraft_ready=lambda _s: True,
+    )
+    job_id = _create(api, tmp_path)
+    status, payload, _ = api.handle("GET", f"/brochures/{job_id}/layout", {}, b"")
+    listed = json.loads(payload)
+    assert status == 200
+    assert listed["page_size"] == [792, 612]
+    assert any(item["frame"] == 80 and item["kind"] == "text" and "TOUR CODE" in item["label"] for item in listed["items"])
+
+    status, payload, _ = api.handle(
+        "POST",
+        f"/brochures/{job_id}/move",
+        {"Content-Type": "application/json"},
+        json.dumps({"frame": 80, "dx": 12, "dy": -4}).encode(),
+    )
+    reply = json.loads(payload)
+    assert status == 200 and reply["changed"] is True and reply["version"] == 1
+    assert moved == {"frame": 80, "dx": 12.0, "dy": -4.0}
+
+    status, payload, _ = api.handle(
+        "POST",
+        f"/brochures/{job_id}/move",
+        {},
+        json.dumps({"frame": 80, "dx": 900, "dy": 0}).encode(),
+    )
+    assert status == 400 and "200" in json.loads(payload)["message"]
+
+
 def test_chat_rejects_empty_and_unknown(tmp_path):
     api = _api(tmp_path, lambda job, *_: _outcome(job.root), lambda *_: ChatOutcome(reply="x"))
     job_id = _create(api, tmp_path)

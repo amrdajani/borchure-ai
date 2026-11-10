@@ -133,6 +133,44 @@ def test_bar_text_is_caps_left_aligned_and_centred_inside_the_bar(tmp_path):
     assert last["size"] <= 10  # shrunk until the story stopped overflowing
 
 
+def test_a_confirmed_cover_title_and_pictures_land_on_the_cover(tmp_path):
+    (tmp_path / "cover.png").write_bytes(b"png")
+    (tmp_path / "logo.png").write_bytes(b"png")
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "slots": [
+                    {"name": "cover photo", "bounds": [528, -7, 800, 622], "file": "missing.jpg", "fit": "fillProportionally"},
+                    {"name": "travel with friends logo", "bounds": [282, 26, 510, 146], "file": "missing.png", "fit": "fitProportionally"},
+                ]
+            }
+        )
+    )
+    client = FakeDesignCraft(
+        {50: "THE HOLY LAND", 51: "Capernaum", 100: "JOIN PASTOR DANE IN"},
+        [
+            _text_frame(1, 50, [540, 160, 770, 300]),
+            _text_frame(2, 51, [40, 220, 180, 250]),
+            _text_frame(3, 100, [543, 74, 769, 144]),
+            {"id": 7, "kind": "<image>", "bounds": [528, -7, 800, 622]},
+            {"id": 8, "kind": "<image>", "bounds": [282, 26, 510, 146]},
+        ],
+    )
+    plan = _plan()
+    plan.cover_title = "Greece"
+    plan.cover_image = str(tmp_path / "cover.png")
+    plan.logo_image = str(tmp_path / "logo.png")
+    notes = polish_document(client, plan, assets_dir=assets)
+    assert client.texts[50] == "Greece"
+    assert client.texts[51] == "Capernaum"
+    assert client.texts[100] == "JOIN PASTOR DANE IN"
+    assert "cover title set to Greece" in notes
+    placed = {inner["frame"]: Path(inner["path"]).name for inner in client.commands("file.place")}
+    assert placed == {7: "cover.png", 8: "logo.png"}
+
+
 def test_cover_line_names_the_host_from_the_approved_host_line(tmp_path):
     client = FakeDesignCraft(
         {100: "JOIN \nEvangelists \nROBBY & TRACEY MITCHELL IN"},

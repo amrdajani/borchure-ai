@@ -8,7 +8,7 @@ frame sizes, so text sits off-centre or runs past the bar.
 This pass puts the look back. It runs once, after every fill and before the
 first save or export. It sends only formatting commands. It never writes text
 that is not already in the approved plan, apart from the cover line that names
-the host, which is built from the approved host line.
+the host and the cover title the person confirmed.
 
 The numbers below are the ones the approved HLMTC1127 brochure uses.
 """
@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
-from designcraft_brochure.craft.assets import picture_frames, place_brand_images
+from designcraft_brochure.craft.assets import match_frames, picture_frames, place_brand_images, slot_layouts
 from designcraft_brochure.craft.qr import register_url, write_qr_png
 from designcraft_brochure.models import BrochurePlan
 
@@ -52,8 +52,10 @@ def polish_document(
         ("host panel", lambda doc: _host_panel(doc)),
         ("price bars", lambda doc: _bars(doc, plan)),
         ("cover line", lambda doc: _cover_line(doc, plan)),
+        ("cover title", lambda doc: _cover_title(doc, plan)),
         ("headline width", lambda doc: _headline_width(doc)),
         ("images", lambda doc: place_brand_images(doc.client, doc.inspect(), assets_dir)),
+        ("chosen pictures", lambda doc: _place_uploads(doc, plan, assets_dir)),
         ("register code", lambda doc: _register_qr(doc, plan, work_dir)),
     ]
     for label, step in steps:
@@ -306,6 +308,93 @@ def _cover_line(doc: _Doc, plan: BrochurePlan) -> list[str]:
         )
         return [f"cover line names {name.title()}"]
     return []
+
+
+_NOT_A_TITLE = re.compile(
+    r"^(join\b|contact info|host:|phone:|email:|first payment|final payment|deadline|"
+    r"airfare|tour code|day\s+\d|round\s*trip|international\b|register)",
+    re.I,
+)
+
+
+def _title_like(text: str) -> bool:
+    plain = " ".join(text.split())
+    if not plain or len(plain) > 48 or any(ch.isdigit() for ch in plain):
+        return False
+    if _NOT_A_TITLE.match(plain) or "@" in plain or "$" in plain:
+        return False
+    letters = sum(ch.isalpha() for ch in plain)
+    return letters >= 3 and letters / len(plain) > 0.6
+
+
+def _cover_title(doc: _Doc, plan: BrochurePlan) -> list[str]:
+    """Put the confirmed cover title into the largest title frame on the cover."""
+    title = " ".join(plan.cover_title.split())
+    if not title:
+        return []
+    ranked: list[tuple[float, int, str]] = []
+    for story in doc.stories():
+        preview = " ".join(str(story.get("preview") or "").split())
+        frames = story.get("frames") or []
+        if not _title_like(preview) or not frames:
+            continue
+        frame = doc.frame(int(frames[0]))
+        if frame is None:
+            continue
+        x0, y0, x1, y1 = frame["bounds"]
+        area = max(0.0, x1 - x0) * max(0.0, y1 - y0)
+        ranked.append((area, int(story["id"]), preview))
+    if not ranked:
+        return []
+    ranked.sort(reverse=True)
+    area, story_id, preview = ranked[0]
+    alone = len(ranked) == 1 and area >= 1500
+    dominant = area >= 8000 and (len(ranked) == 1 or area >= ranked[1][0] * 1.5)
+    if not alone and not dominant:
+        return []
+    if preview == title:
+        return []
+    doc.run("text.select", {"story": story_id, "anchor": 0, "focus": min(4, max(len(preview), 1))})
+    found = doc.run("type.selectionAttrs", {}).get("chars", {})
+    keep = {key: found[key] for key in ("fontFamily", "size", "fill", "tracking") if key in found}
+    doc.run("story.setText", {"story": story_id, "text": title})
+    length = len(title.encode("utf-8"))
+    if keep:
+        doc.style(story_id, 0, length, keep, {"align": "left"})
+    return [f"cover title set to {title}"]
+
+
+def _place_uploads(doc: _Doc, plan: BrochurePlan, assets_dir: Path | None) -> list[str]:
+    """The cover photo and logo the person attached, into the frames those slots name."""
+    wanted = [("cover", plan.cover_image, "fillProportionally"), ("logo", plan.logo_image, "fitProportionally")]
+    wanted = [(kind, path, fit) for kind, path, fit in wanted if path and Path(path).is_file()]
+    if not wanted:
+        return []
+    frames = picture_frames(doc.inspect())
+    layouts = slot_layouts(assets_dir) if assets_dir is not None else []
+    used: set[int] = set()
+    notes: list[str] = []
+    for kind, path, fit in wanted:
+        slots = [slot for slot in layouts if kind in slot["name"].lower()]
+        pair = match_frames(slots, [frame for frame in frames if frame["id"] not in used])
+        frame = pair[0][1] if pair else None
+        if frame is None and kind == "cover":
+            open_frames = [item for item in frames if item["id"] not in used]
+            frame = max(open_frames, key=_frame_area) if open_frames else None
+        if frame is None:
+            continue
+        frame_id = int(frame["id"])
+        mode = next((slot["fit"] for slot, chosen in pair if chosen["id"] == frame_id), fit) if pair else fit
+        doc.run("file.place", {"path": str(Path(path).resolve()), "frame": frame_id})
+        doc.run("object.fit", {"mode": mode, "ids": [frame_id]})
+        used.add(frame_id)
+        notes.append("placed cover photo" if kind == "cover" else "placed logo")
+    return notes
+
+
+def _frame_area(frame: dict) -> float:
+    x0, y0, x1, y1 = frame["bounds"]
+    return max(0.0, x1 - x0) * max(0.0, y1 - y0)
 
 
 def _headline_width(doc: _Doc) -> list[str]:

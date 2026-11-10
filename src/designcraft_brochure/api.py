@@ -11,7 +11,7 @@ import os
 import re
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
@@ -28,7 +28,7 @@ from designcraft_brochure.craft.session import open_session
 from designcraft_brochure.jev.brain import TypeSafeBrain
 from designcraft_brochure.models import RunOutcome
 from designcraft_brochure.previews import render_pages
-from designcraft_brochure.content.plan import normalize_tour_code
+from designcraft_brochure.content.plan import ConfirmedFacts, normalize_tour_code
 from designcraft_brochure.safety import SafetyError, is_suspicious
 from designcraft_brochure.templates.saved import LibraryError, TemplateLibrary
 
@@ -89,6 +89,8 @@ class ChatOutcome:
 
 
 ChatRunner = Callable[["ChatJob", Settings, str], ChatOutcome]
+LayoutRunner = Callable[[Path, Settings, str], dict]
+MoveRunner = Callable[[Path, Path, Settings, str, int, float, float], ChatOutcome]
 
 
 @dataclass
@@ -101,6 +103,7 @@ class JobPaths:
     preview_dir: Path
     log_dir: Path
     tour_code: str | None = None
+    facts: ConfirmedFacts | None = None
 
 
 class JobLog(Progress):
@@ -122,6 +125,8 @@ class BrochureAPI:
         backend: str = "live",
         runner: Runner | None = None,
         chat_runner: ChatRunner | None = None,
+        layout_runner: LayoutRunner | None = None,
+        move_runner: MoveRunner | None = None,
         designcraft_ready: ReadyCheck | None = None,
         library_root: Path | None = None,
         token: str = "",
@@ -133,6 +138,8 @@ class BrochureAPI:
         self.token = token
         self.runner = runner or run_uploaded_job
         self.chat_runner = chat_runner or run_chat_job
+        self.layout_runner = layout_runner or run_layout_job
+        self.move_runner = move_runner or run_move_job
         self.designcraft_ready = designcraft_ready or designcraft_is_ready
         self._lock = threading.Lock()
 
@@ -157,6 +164,12 @@ class BrochureAPI:
             chat = re.fullmatch(r"/brochures/([0-9a-f]{32})/chat", path)
             if method == "POST" and chat:
                 return self._chat(chat.group(1), headers, body)
+            layout = re.fullmatch(r"/brochures/([0-9a-f]{32})/layout", path)
+            if method == "GET" and layout:
+                return self._layout(layout.group(1))
+            move = re.fullmatch(r"/brochures/([0-9a-f]{32})/move", path)
+            if method == "POST" and move:
+                return self._move(move.group(1), body)
             if method == "GET" and path.startswith("/brochures/"):
                 return self._download(path)
         except ApiError as exc:
@@ -184,6 +197,9 @@ class BrochureAPI:
         parts = parse_multipart(content_type, body)
         files = parts.files
         tour_code = _read_tour_code(parts.fields.get("tour_code"))
+        facts = _read_facts(parts.fields)
+        for field in ("cover", "logo"):
+            _check_image(files.get(field), field)
         proposal = _required_file(files, "proposal", PROPOSAL_SUFFIXES)
         template = self._template_for_run(files, parts.fields.get("template_id"))
         if not self._lock.acquire(blocking=False):
@@ -192,6 +208,7 @@ class BrochureAPI:
         try:
             job = _prepare_job(self.jobs_root, job_id, proposal, template)
             job.tour_code = tour_code
+            job.facts = _store_chosen_images(job.root, facts, files)
             outcome = self.runner(job, self.settings, self.backend)
         except ApiError:
             raise
@@ -332,6 +349,86 @@ class BrochureAPI:
                 "native": f"/brochures/{job_id}/native" if record.get("native_path") else None,
                 "idml": f"/brochures/{job_id}/idml" if record.get("idml_path") else None,
                 "pages": [f"/brochures/{job_id}/page/{n}" for n in range(1, len(record.get("pages", [])) + 1)],
+            },
+        )
+
+    def _open_record(self, job_id: str) -> tuple[Path, Path, dict, Path]:
+        root = self.jobs_root / job_id
+        record_path = root / "result.json"
+        if not record_path.is_file():
+            raise ApiError(404, "Unknown brochure.")
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        if record.get("status") != "completed":
+            raise ApiError(422, "Create the brochure before changing it.")
+        source = _revision_source(root, record)
+        if source is None:
+            raise ApiError(422, "This brochure has no edited file to open.")
+        return root, record_path, record, source
+
+    def _layout(self, job_id: str) -> tuple[int, bytes, str]:
+        _root, _record_path, _record, source = self._open_record(job_id)
+        self._require_ready()
+        if not self._lock.acquire(blocking=False):
+            raise ApiError(409, "Still working on the last change. Wait for it to finish.")
+        try:
+            snapshot = self.layout_runner(source, self.settings, self.backend)
+        except ApiError:
+            raise
+        except Exception as exc:
+            return _json(500, {"status": "failed", "message": str(exc) or "The pieces could not be read."})
+        finally:
+            self._lock.release()
+        return _json(200, {"status": "completed", **layout_payload(snapshot)})
+
+    def _move(self, job_id: str, body: bytes) -> tuple[int, bytes, str]:
+        root, record_path, record, source = self._open_record(job_id)
+        try:
+            data = json.loads(body.decode("utf-8") or "{}")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise ApiError(400, "The move could not be read.")
+        frame, dx, dy = data.get("frame"), data.get("dx"), data.get("dy")
+        if not isinstance(frame, int) or isinstance(frame, bool):
+            raise ApiError(400, "Say which piece to move.")
+        if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (dx, dy)):
+            raise ApiError(400, "The move needs a horizontal and a vertical distance.")
+        self._require_ready()
+        if not self._lock.acquire(blocking=False):
+            raise ApiError(409, "Still working on the last change. Wait for it to finish.")
+        try:
+            revision_dir = _next_revision_dir(root)
+            outcome = self.move_runner(source, revision_dir, self.settings, self.backend, frame, float(dx), float(dy))
+        except ApiError:
+            raise
+        except Exception as exc:
+            return _json(500, {"status": "failed", "message": str(exc) or "That move did not work."})
+        finally:
+            self._lock.release()
+        if not outcome.changed or not outcome.pdf_path:
+            return _json(400, {"status": "failed", "message": outcome.reply or "That piece could not be moved."})
+        version = int(record.get("version", 0)) + 1
+        current = {key: record.get(key) for key in ("pdf_path", "native_path", "idml_path", "pages")}
+        record["history"] = [*record.get("history", []), current][-20:]
+        pages = render_pages(Path(outcome.pdf_path), revision_dir / "pages")
+        record.update(
+            pdf_path=outcome.pdf_path,
+            native_path=outcome.native_path,
+            idml_path=outcome.idml_path,
+            pages=[str(path) for path in pages],
+            version=version,
+        )
+        record_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        return _json(
+            200,
+            {
+                "id": job_id,
+                "status": "completed",
+                "changed": True,
+                "notes": outcome.notes,
+                "version": version,
+                "pdf": f"/brochures/{job_id}/pdf",
+                "native": f"/brochures/{job_id}/native" if record.get("native_path") else None,
+                "idml": f"/brochures/{job_id}/idml" if record.get("idml_path") else None,
+                "pages": [f"/brochures/{job_id}/page/{n}" for n in range(1, len(pages) + 1)],
             },
         )
 
@@ -505,6 +602,90 @@ def run_chat_job(job: ChatJob, settings: Settings, backend: str) -> ChatOutcome:
         client.close()
 
 
+def _craft_client(work_dir: Path, settings: Settings, backend: str):
+    if backend == "simulated":
+        raise ApiError(503, "Moving pieces needs DesignCraft.")
+    if backend == "headless":
+        from designcraft_brochure.craft.headless import HeadlessCraft
+
+        return HeadlessCraft(work_dir)
+    return ControlClient(settings.control_host, settings.control_port)
+
+
+def run_layout_job(source: Path, settings: Settings, backend: str) -> dict:
+    """Open the brochure and return each piece with its page and position."""
+    client = _craft_client(source.parent, settings, backend)
+    try:
+        chat_edit.open_document(client, source)
+        return chat_edit.take_snapshot(client)
+    finally:
+        client.close()
+
+
+def run_move_job(
+    source: Path,
+    revision_dir: Path,
+    settings: Settings,
+    backend: str,
+    frame: int,
+    dx: float,
+    dy: float,
+) -> ChatOutcome:
+    """Move one piece by a point offset and export the brochure again."""
+    client = _craft_client(revision_dir, settings, backend)
+    try:
+        working = chat_edit.save_working_copy(source, revision_dir)
+        chat_edit.open_document(client, working)
+        snapshot = chat_edit.take_snapshot(client)
+        ops = chat_edit.validate_ops([{"op": "move", "frame": frame, "dx": dx, "dy": dy}], snapshot, 0)
+        notes = chat_edit.apply_ops(client, ops, snapshot, images=[], work_dir=revision_dir)
+        pdf = revision_dir / "brochure.pdf"
+        native = revision_dir / "brochure.designcraft"
+        idml = revision_dir / "brochure-edited.idml"
+        chat_edit.export_all(client, pdf, native, idml)
+        return ChatOutcome(
+            reply="Moved.",
+            changed=True,
+            pdf_path=str(pdf),
+            native_path=str(native),
+            idml_path=str(idml),
+            notes=notes,
+        )
+    except chat_edit.ChatError as exc:
+        return ChatOutcome(reply=str(exc))
+    finally:
+        client.close()
+
+
+def layout_payload(snapshot: dict) -> dict:
+    """The fields the page editor needs. Bounds are page points, origin at the top left."""
+    width, height = snapshot.get("page_size") or [0, 0]
+    items: list[dict] = []
+    for shape in snapshot.get("shapes") or []:
+        items.append(_layout_item(shape, "shape", "Box"))
+    for picture in snapshot.get("pictures") or []:
+        items.append(_layout_item(picture, "picture", "Picture"))
+    for story in snapshot.get("stories") or []:
+        text = " ".join(str(story.get("text") or "").split())
+        items.append(_layout_item(story, "text", text[:80] or "Text"))
+    return {"page_size": [width, height], "items": [item for item in items if item]}
+
+
+def _layout_item(raw: dict, kind: str, label: str) -> dict | None:
+    bounds = raw.get("bounds")
+    frame = raw.get("frame")
+    page = raw.get("page")
+    if (
+        not isinstance(frame, int)
+        or isinstance(frame, bool)
+        or not isinstance(page, int)
+        or not isinstance(bounds, list)
+        or len(bounds) != 4
+    ):
+        return None
+    return {"frame": frame, "page": page, "kind": kind, "bounds": bounds, "label": label}
+
+
 def _first_pages(root: Path, outcome: RunOutcome) -> list[Path]:
     if outcome.status != "completed" or not outcome.pdf_path:
         return []
@@ -544,6 +725,7 @@ def run_uploaded_job(job: JobPaths, settings: Settings, backend: str) -> RunOutc
             progress=progress,
             use_uploaded_template=True,
             tour_code=job.tour_code,
+            facts=job.facts,
         )
         if isinstance(prepared, RunOutcome):
             return prepared
@@ -757,6 +939,98 @@ def _read_tour_code(value: str | None) -> str | None:
     if code is None:
         raise ApiError(400, "The tour code can only have letters, numbers and dashes, 2 to 24 characters.")
     return code
+
+
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _read_facts(fields: dict[str, str]) -> ConfirmedFacts:
+    return ConfirmedFacts(
+        cover_title=_read_short(fields.get("cover_title"), "The cover title", 80),
+        total=_read_price(fields.get("total")),
+        deposit=_read_price(fields.get("deposit"), allow_none=True),
+        trip_start=_read_iso(fields.get("trip_start"), "trip start"),
+        trip_end=_read_iso(fields.get("trip_end"), "trip end"),
+        first_payment=_read_iso(fields.get("first_payment"), "first payment"),
+        final_payment=_read_iso(fields.get("final_payment"), "final payment"),
+        deadline=_read_iso(fields.get("deadline"), "deadline"),
+        host_name=_read_short(fields.get("host_name"), "The host name", 80),
+        host_phone=_read_short(fields.get("host_phone"), "The host phone", 40),
+        host_email=_read_email(fields.get("host_email")),
+    )
+
+
+def _read_short(value: str | None, label: str, limit: int) -> str:
+    if value is None or not value.strip():
+        return ""
+    text = " ".join(value.split())
+    if not text:
+        return ""
+    if len(text) > limit:
+        raise ApiError(400, f"{label} has to fit on one line.")
+    if is_suspicious(text):
+        raise ApiError(400, f"{label} can't be used.")
+    return text
+
+
+def _read_price(value: str | None, *, allow_none: bool = False) -> str:
+    if value is None or not value.strip():
+        return ""
+    text = " ".join(value.split())
+    if allow_none and text.lower() == "none":
+        return "none"
+    if len(text) > 32 or not re.search(r"\d", text) or is_suspicious(text):
+        raise ApiError(400, "That price can't be used.")
+    return text
+
+
+def _read_iso(value: str | None, label: str) -> str:
+    if value is None or not value.strip():
+        return ""
+    text = value.strip()
+    if not _ISO_DATE.fullmatch(text):
+        raise ApiError(400, f"The {label} has to be a date.")
+    year, month, day = (int(part) for part in text.split("-"))
+    if month < 1 or month > 12 or day < 1 or day > 31:
+        raise ApiError(400, f"The {label} has to be a date.")
+    return text
+
+
+def _read_email(value: str | None) -> str:
+    if value is None or not value.strip():
+        return ""
+    text = value.strip()
+    if len(text) > 80 or "@" not in text or "." not in text.split("@")[-1] or is_suspicious(text):
+        raise ApiError(400, "That email address can't be used.")
+    return text
+
+
+def _check_image(uploaded: UploadedFile | None, field: str) -> None:
+    if uploaded is None:
+        return
+    if not uploaded.data:
+        raise ApiError(400, f"The {field} file is empty.")
+    _safe_filename(uploaded.filename, IMAGE_SUFFIXES)
+
+
+def _store_chosen_images(root: Path, facts: ConfirmedFacts, files: dict[str, UploadedFile]) -> ConfirmedFacts:
+    updates: dict[str, str] = {}
+    cover = files.get("cover")
+    logo = files.get("logo")
+    if cover is not None:
+        updates["cover_image"] = _store_named_image(root, cover)
+    if logo is not None:
+        updates["logo_image"] = _store_named_image(root, logo)
+    return replace(facts, **updates) if updates else facts
+
+
+def _store_named_image(root: Path, image: UploadedFile) -> str:
+    name = _safe_filename(image.filename, IMAGE_SUFFIXES)
+    folder = root / "input" / "images"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
+    path.write_bytes(image.data)
+    return str(path.resolve())
 
 
 def _read_title(uploaded: UploadedFile | None) -> str | None:

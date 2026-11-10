@@ -6,7 +6,7 @@ from pathlib import Path
 
 from designcraft_brochure.agent.loop import Progress, RunContext
 from designcraft_brochure.config import Settings
-from designcraft_brochure.content.plan import build_plan
+from designcraft_brochure.content.plan import ConfirmedFacts, build_plan
 from designcraft_brochure.jev.brain import Brain
 from designcraft_brochure.jev.questions import template_questions
 from designcraft_brochure.models import Proposal, RunOutcome, TemplateInfo
@@ -32,6 +32,7 @@ def prepare_run(
     progress: Progress,
     use_uploaded_template: bool = False,
     tour_code: str | None = None,
+    facts: ConfirmedFacts | None = None,
 ) -> RunContext | RunOutcome:
     progress.say("Reading proposal.")
     try:
@@ -80,7 +81,7 @@ def prepare_run(
         return RunOutcome(status="needs_assistance", message=str(exc))
     except SafetyError as exc:
         return RunOutcome(status="failed", message=str(exc))
-    plan = build_plan(proposal, chosen, brain, settings, tour_code=tour_code)
+    plan = build_plan(proposal, chosen, brain, settings, tour_code=tour_code, facts=facts)
     if not plan.blocks:
         return RunOutcome(
             status="needs_assistance",

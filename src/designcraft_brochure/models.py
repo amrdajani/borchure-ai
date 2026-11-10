@@ -49,6 +49,10 @@ class BrochurePlan(BaseModel):
     blocks: list[CopyBlock] = Field(default_factory=list)
     image_paths: list[str] = Field(default_factory=list)
     missing_information: list[str] = Field(default_factory=list)
+    # Set from the form. The finishing pass prints the title and places the pictures.
+    cover_title: str = ""
+    cover_image: str = ""
+    logo_image: str = ""
 
 
 class TemplateInfo(BaseModel):

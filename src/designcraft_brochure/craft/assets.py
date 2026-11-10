@@ -24,6 +24,22 @@ def default_assets_dir() -> Path:
     return Path(__file__).resolve().parents[3] / "assets"
 
 
+def slot_layouts(assets_dir: Path) -> list[dict]:
+    """Slot name, bounds, and fit. The picture file does not have to be present."""
+    manifest = assets_dir / "manifest.json"
+    if not manifest.is_file():
+        return []
+    slots = json.loads(manifest.read_text(encoding="utf-8")).get("slots", [])
+    usable = []
+    for slot in slots:
+        bounds = slot.get("bounds")
+        name = str(slot.get("name", "")).strip()
+        fit = slot.get("fit")
+        if isinstance(bounds, list) and len(bounds) == 4 and fit in _FITS and name:
+            usable.append({"name": name, "bounds": [float(edge) for edge in bounds], "fit": fit})
+    return usable
+
+
 def load_slots(assets_dir: Path) -> list[dict]:
     manifest = assets_dir / "manifest.json"
     if not manifest.is_file():

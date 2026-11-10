@@ -278,6 +278,56 @@ def _write_many_stories(path: Path, stories: list[str]) -> None:
             )
 
 
+def test_confirmed_answers_replace_the_prices_host_dates_and_title():
+    from designcraft_brochure.content.plan import ConfirmedFacts, apply_confirmed
+
+    plan = BrochurePlan(
+        template_id="t",
+        blocks=[
+            CopyBlock(id="p1", role="price", text="$4,900", source_backed=True),
+            CopyBlock(id="p2", role="price", text="$350", source_backed=True),
+            CopyBlock(id="h0", role="host_panel", text="CONTACT INFO", source_backed=True),
+            CopyBlock(id="h1", role="host_panel", text="HOST: OLD NAME", source_backed=True),
+            CopyBlock(id="h2", role="host_panel", text="EMAIL: old@example.com", source_backed=True),
+            CopyBlock(id="d1", role="date", text="July 13, 2027", source_backed=True),
+            CopyBlock(id="t0", role="trip_date", text="JUL 1-8, 2027", source_backed=True),
+        ],
+    )
+    apply_confirmed(
+        plan,
+        "Prepared for Pastor Dana Cole",
+        ConfirmedFacts(
+            cover_title="  Greece  ",
+            total="$2,200",
+            deposit="$500",
+            trip_start="2027-11-10",
+            trip_end="2027-11-19",
+            first_payment="2027-07-01",
+            final_payment="2027-08-01",
+            host_name="Dana Cole",
+            host_phone="501-555-0100",
+            host_email="dana@example.com",
+        ),
+    )
+    assert [block.text for block in plan.blocks if block.role == "price"] == ["$2,200", "$500"]
+    host = [block.text for block in plan.blocks if block.role == "host_panel"]
+    assert host[1] == "HOST: PASTOR DANA COLE"
+    assert "PHONE: 501-555-0100" in host
+    assert "EMAIL: dana@example.com" in host
+    assert "FIRST PAYMENT: July 1, 2027" in host
+    assert "FINAL PAYMENT: August 1, 2027" in host
+    assert [block.text for block in plan.blocks if block.role == "trip_date"] == ["NOV 10-19, 2027"]
+    assert [block.text for block in plan.blocks if block.role == "date"] == ["July 1, 2027", "August 1, 2027"]
+    assert plan.cover_title == "Greece"
+
+    untouched = BrochurePlan(
+        template_id="t",
+        blocks=[CopyBlock(id="p1", role="price", text="$4,900", source_backed=True)],
+    )
+    apply_confirmed(untouched, "", ConfirmedFacts())
+    assert untouched.blocks[0].text == "$4,900"
+
+
 def test_a_typed_tour_code_replaces_the_blank_bar_and_wins_over_the_proposal():
     assert tour_code_line("no code here") == "Tour Code:"
     assert tour_code_line("no code here", " hlmrs426 ") == "Tour Code: HLMRS426"
