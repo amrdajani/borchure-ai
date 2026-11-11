@@ -203,6 +203,9 @@ class BrochureAPI:
         photos = [item for item in parts.images if item.field == "photo"][:24]
         for photo in photos:
             _check_image(photo, "photo")
+        links = [item for item in parts.images if item.field == "link"][:12]
+        for link in links:
+            _check_image(link, "link")
         proposal = _required_file(files, "proposal", PROPOSAL_SUFFIXES)
         template = self._template_for_run(files, parts.fields.get("template_id"))
         if not self._lock.acquire(blocking=False):
@@ -211,7 +214,14 @@ class BrochureAPI:
         try:
             job = _prepare_job(self.jobs_root, job_id, proposal, template)
             job.tour_code = tour_code
-            job.facts = _store_chosen_images(job.root, facts, files, photos)
+            job.facts = _store_chosen_images(
+                job.root,
+                facts,
+                files,
+                photos,
+                links,
+                _read_link_names(parts.fields.get("template_link_names")),
+            )
             outcome = self.runner(job, self.settings, self.backend)
         except ApiError:
             raise
@@ -786,7 +796,7 @@ def parse_multipart(content_type: str, body: bytes) -> FormParts:
         if not field:
             continue
         uploaded = UploadedFile(field=field, filename=filename, data=data)
-        if field in {"image", "photo"}:
+        if field in {"image", "photo", "link"}:
             images.append(uploaded)
             continue
         files[field] = uploaded
@@ -1016,11 +1026,34 @@ def _check_image(uploaded: UploadedFile | None, field: str) -> None:
     _safe_filename(uploaded.filename, IMAGE_SUFFIXES)
 
 
+def _read_link_names(value: str | None) -> list[str]:
+    if value is None or not value.strip():
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    names: list[str] = []
+    for item in parsed[:24]:
+        if not isinstance(item, str):
+            continue
+        name = Path(item).name.strip()
+        if not name or len(name) > 180 or is_suspicious(name):
+            continue
+        if name not in names:
+            names.append(name)
+    return names
+
+
 def _store_chosen_images(
     root: Path,
     facts: ConfirmedFacts,
     files: dict[str, UploadedFile],
     photos: list[UploadedFile] | None = None,
+    links: list[UploadedFile] | None = None,
+    link_names: list[str] | None = None,
 ) -> ConfirmedFacts:
     updates: dict[str, str | list[str]] = {}
     cover = files.get("cover")
@@ -1032,6 +1065,11 @@ def _store_chosen_images(
     gallery = [_store_named_image(root, photo) for photo in photos or [] if photo.data]
     if gallery:
         updates["gallery_images"] = gallery
+    stored_links = [_store_named_image(root, link) for link in links or [] if link.data]
+    if stored_links:
+        updates["template_links"] = stored_links
+    if link_names:
+        updates["template_link_names"] = link_names
     return replace(facts, **updates) if updates else facts
 
 

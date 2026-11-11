@@ -98,6 +98,9 @@ class SimulatedSession:
         suffix = path.suffix.lower()
         if suffix == ".idml":
             texts, _pages, images = read_idml_stories(path)
+        elif suffix == ".indd":
+            texts = [""]
+            images = 1
         elif suffix == ".designcraft":
             payload = read_snapshot(path)
             texts = [str(item.get("text", "")) for item in payload.get("stories", [])]
@@ -204,7 +207,12 @@ class LiveSession:
             return []
         from designcraft_brochure.craft.polish import polish_document
 
-        return polish_document(self.client, plan, work_dir=work_dir)
+        return polish_document(
+            self.client,
+            plan,
+            work_dir=work_dir,
+            preserve_pictures=str(self.opened_path).lower().endswith(".indd"),
+        )
 
     def save_outputs(self, native_path: Path, idml_path: Path) -> None:
         if not self.opened_path:

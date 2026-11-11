@@ -13,7 +13,6 @@ from designcraft_brochure.models import Proposal, RunOutcome, TemplateInfo
 from designcraft_brochure.proposal.extract import extract_proposal
 from designcraft_brochure.proposal.reader import ReadError, read_source
 from designcraft_brochure.safety import SafetyError, sha256_file
-from designcraft_brochure.templates.indd import convert_indd_to_idml
 from designcraft_brochure.templates.library import copy_working_file, discover_templates, openable_templates
 
 
@@ -46,12 +45,7 @@ def prepare_run(
         return RunOutcome(status="failed", message=str(exc))
     usable = openable_templates(templates)
     if not usable:
-        if any(item.suffix == ".indd" for item in templates):
-            return RunOutcome(
-                status="failed",
-                message="Only .indd templates were found, and indd-utils is not installed to convert them.",
-            )
-        return RunOutcome(status="failed", message="No .idml or .designcraft templates were found.")
+        return RunOutcome(status="failed", message="No .indd, .idml, or .designcraft templates were found.")
     proposal = extract_proposal(source, brain)
     if use_uploaded_template and len(usable) == 1:
         progress.say("Using the uploaded template.")
@@ -63,25 +57,12 @@ def prepare_run(
             return RunOutcome(status="needs_assistance", message="Jev did not find a suitable template.")
     try:
         working = copy_working_file(chosen, output_dir, template_root, overwrite=overwrite)
-        if working.suffix.lower() == ".indd":
-            progress.say("Converting the working copy from INDD to IDML.")
-            converted = working.with_suffix(".idml")
-            if converted.exists() and not overwrite:
-                return RunOutcome(
-                    status="needs_assistance",
-                    message=f"Converted IDML already exists: {converted}",
-                    working_copy=str(working),
-                )
-            template_hash = sha256_file(Path(chosen.path))
-            convert_indd_to_idml(working, converted)
-            if sha256_file(Path(chosen.path)) != template_hash:
-                return RunOutcome(status="failed", message="The original .indd template changed during conversion.")
-            working = converted
     except FileExistsError as exc:
         return RunOutcome(status="needs_assistance", message=str(exc))
     except SafetyError as exc:
         return RunOutcome(status="failed", message=str(exc))
     plan = build_plan(proposal, chosen, brain, settings, tour_code=tour_code, facts=facts)
+    _stage_template_links(working, plan)
     if not plan.blocks:
         return RunOutcome(
             status="needs_assistance",
@@ -128,6 +109,22 @@ def prepare_run(
         control_host=settings.control_host,
         control_port=settings.control_port,
     )
+
+
+def _stage_template_links(working: Path, plan) -> None:
+    """Leave fetched pictures beside the working file, where a missing link is looked up."""
+    if not plan.template_links:
+        return
+    folder = working.parent / "Links"
+    folder.mkdir(parents=True, exist_ok=True)
+    for path in plan.template_links:
+        source = Path(path)
+        if not source.is_file():
+            continue
+        target = folder / source.name
+        if target.resolve() == source.resolve():
+            continue
+        target.write_bytes(source.read_bytes())
 
 
 def _choose_template(proposal: Proposal, templates: list[TemplateInfo], brain: Brain) -> TemplateInfo | None:

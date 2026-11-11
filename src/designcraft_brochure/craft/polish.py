@@ -19,7 +19,13 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
-from designcraft_brochure.craft.assets import match_frames, picture_frames, place_brand_images, slot_layouts
+from designcraft_brochure.craft.assets import (
+    default_assets_dir,
+    match_frames,
+    picture_frames,
+    place_brand_images,
+    slot_layouts,
+)
 from designcraft_brochure.craft.qr import register_url, write_qr_png
 from designcraft_brochure.models import BrochurePlan
 
@@ -44,6 +50,7 @@ def polish_document(
     *,
     assets_dir: Path | None = None,
     work_dir: Path | None = None,
+    preserve_pictures: bool = False,
 ) -> list[str]:
     """Run each step on its own. A step that fails is reported and skipped."""
     notes: list[str] = []
@@ -54,10 +61,16 @@ def polish_document(
         ("cover line", lambda doc: _cover_line(doc, plan)),
         ("cover title", lambda doc: _cover_title(doc, plan)),
         ("headline width", lambda doc: _headline_width(doc)),
-        ("images", lambda doc: place_brand_images(doc.client, doc.inspect(), assets_dir)),
-        ("chosen pictures", lambda doc: _place_uploads(doc, plan, assets_dir)),
-        ("register code", lambda doc: _register_qr(doc, plan, work_dir)),
     ]
+    steps.append(("template pictures", lambda doc: _place_template_links(doc, plan, assets_dir)))
+    if not preserve_pictures:
+        steps.append(("images", lambda doc: place_brand_images(doc.client, doc.inspect(), assets_dir)))
+    steps.extend(
+        [
+            ("chosen pictures", lambda doc: _place_uploads(doc, plan, assets_dir, keep_existing=preserve_pictures)),
+            ("register code", lambda doc: _register_qr(doc, plan, work_dir)),
+        ]
+    )
     for label, step in steps:
         try:
             doc = _Doc(client)
@@ -364,7 +377,66 @@ def _cover_title(doc: _Doc, plan: BrochurePlan) -> list[str]:
     return [f"cover title set to {title}"]
 
 
-def _place_uploads(doc: _Doc, plan: BrochurePlan, assets_dir: Path | None) -> list[str]:
+_RASTER = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".gif"}
+_BRAND_FILE = {
+    "facebook": "brand/facebook.png",
+    "instagram": "brand/instagram.png",
+    "sun": "brand/twf-sun-yellow.png",
+    "logo": "brand/twf-logo.png",
+}
+
+
+def _link_kind(name: str) -> str | None:
+    folded = name.lower()
+    if "facebook" in folded:
+        return "facebook"
+    if "instagram" in folded:
+        return "instagram"
+    if "icon-yellow" in folded or "icon_yellow" in folded or "sun" in folded:
+        return "sun"
+    if "logo" in folded or "alt-white" in folded or "wordmark" in folded:
+        return "logo"
+    return None
+
+
+def _place_template_links(doc: _Doc, plan: BrochurePlan, assets_dir: Path | None) -> list[str]:
+    """Put the Dropbox pictures the template already uses back into their frames."""
+    root = (assets_dir or default_assets_dir()).expanduser()
+    files = {Path(path).name.lower(): Path(path) for path in plan.template_links if Path(path).is_file()}
+    names = list(plan.template_link_names)
+    known = {name.lower() for name in names}
+    for filename in files:
+        if filename not in known:
+            names.append(filename)
+    if not names:
+        return []
+    frames = picture_frames(doc.inspect())
+    layouts = slot_layouts(root)
+    used: set[int] = set()
+    notes: list[str] = []
+    for name in names:
+        kind = _link_kind(name)
+        if kind is None:
+            continue
+        source = files.get(Path(name).name.lower())
+        if source is None or source.suffix.lower() not in _RASTER:
+            fallback = _BRAND_FILE.get(kind)
+            source = root / fallback if fallback else None
+        if source is None or not source.is_file():
+            continue
+        slots = [slot for slot in layouts if kind in slot["name"].lower()]
+        pair = match_frames(slots, [frame for frame in frames if frame["id"] not in used])
+        if not pair:
+            continue
+        frame_id = int(pair[0][1]["id"])
+        doc.run("file.place", {"path": str(source.resolve()), "frame": frame_id})
+        doc.run("object.fit", {"mode": pair[0][0]["fit"], "ids": [frame_id]})
+        used.add(frame_id)
+        notes.append(f"placed {kind}")
+    return notes
+
+
+def _place_uploads(doc: _Doc, plan: BrochurePlan, assets_dir: Path | None, *, keep_existing: bool = False) -> list[str]:
     """The cover photo and logo the person attached, into the frames those slots name."""
     wanted = [("cover", plan.cover_image, "fillProportionally"), ("logo", plan.logo_image, "fitProportionally")]
     wanted = [(kind, path, fit) for kind, path, fit in wanted if path and Path(path).is_file()]
@@ -389,6 +461,12 @@ def _place_uploads(doc: _Doc, plan: BrochurePlan, assets_dir: Path | None) -> li
         doc.run("object.fit", {"mode": mode, "ids": [frame_id]})
         used.add(frame_id)
         notes.append("placed cover photo" if kind == "cover" else "placed logo")
+    if keep_existing:
+        return notes
+    if not any(kind == "logo" for kind, _path, _fit in wanted):
+        logo_slots = [slot for slot in layouts if "logo" in slot["name"].lower()]
+        for _slot, frame in match_frames(logo_slots, frames):
+            used.add(int(frame["id"]))
     for path in plan.gallery_images:
         photo = Path(path)
         if not photo.is_file():

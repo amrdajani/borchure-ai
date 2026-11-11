@@ -1,7 +1,7 @@
 """Discover brochure templates without modifying them.
 
-DesignCraft opens .idml and its own .designcraft files. An .indd file is
-offered only when indd-utils can convert a copy to IDML first.
+DesignCraft opens .idml, .designcraft, and .indd. An .indd file is
+opened directly so the pictures already in the file stay there.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from xml.etree import ElementTree
 
 from designcraft_brochure.models import TemplateInfo
 from designcraft_brochure.safety import SafetyError, assert_not_template_target, sha256_file
-from designcraft_brochure.templates.indd import find_indd_binary
 
 _OPENABLE = {".idml", ".designcraft"}
 _LISTED = _OPENABLE | {".indd"}
@@ -117,18 +116,13 @@ def _replace_story_text(payload: bytes, text: str) -> bytes:
 def _describe(path: Path, category: str) -> TemplateInfo:
     suffix = path.suffix.lower()
     if suffix == ".indd":
-        converter = find_indd_binary()
-        if converter is None:
-            notes = "indd-utils is not installed, so this .indd file cannot be converted."
-        else:
-            notes = "A copy is converted to IDML with indd-utils. The original .indd file is not modified."
         return TemplateInfo(
             id="",
             path=str(path),
             category=category,
             suffix=suffix,
-            notes=notes,
-            openable=converter is not None,
+            notes="DesignCraft opens a copy of this .indd file. The pictures stay in the file, and the original is not modified.",
+            openable=True,
         )
     if suffix == ".idml":
         try:

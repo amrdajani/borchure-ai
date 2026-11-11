@@ -111,9 +111,7 @@ def cmd_templates(args) -> int:
         return 0
     for item in found:
         pages = item.page_count if item.page_count is not None else "?"
-        if item.suffix == ".indd" and item.openable:
-            flag = "convert"
-        elif item.openable:
+        if item.openable:
             flag = "openable"
         else:
             flag = "not-openable"

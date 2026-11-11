@@ -54,6 +54,9 @@ class BrochurePlan(BaseModel):
     cover_image: str = ""
     logo_image: str = ""
     gallery_images: list[str] = Field(default_factory=list)
+    # Pictures the .indd linked from Dropbox, fetched onto this machine before the run.
+    template_links: list[str] = Field(default_factory=list)
+    template_link_names: list[str] = Field(default_factory=list)
 
 
 class TemplateInfo(BaseModel):

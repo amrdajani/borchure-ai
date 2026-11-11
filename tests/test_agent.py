@@ -176,7 +176,7 @@ def test_trip_dates_use_the_bar_format_and_a_missing_tour_code_stays_blank():
     assert _is_range("November 30 to December 9, 2027")
 
 
-def test_indd_templates_are_not_offered(tmp_path):
+def test_indd_templates_stay_indd(tmp_path):
     root = tmp_path / "templates"
     indd = root / "travel" / "old.indd"
     indd.parent.mkdir(parents=True)
@@ -194,9 +194,10 @@ def test_indd_templates_are_not_offered(tmp_path):
         ocr=False,
         progress=Progress(),
     )
-    assert isinstance(outcome, RunOutcome)
-    assert outcome.status == "failed"
-    assert ".indd" in outcome.message
+    assert not isinstance(outcome, RunOutcome)
+    assert outcome.working_copy.suffix.lower() == ".indd"
+    assert outcome.working_copy.read_bytes() == b"not a real indd"
+    assert sha256_file(indd) == sha256_file(outcome.template_path)
 
 
 def test_an_open_template_is_exported_when_no_story_matches(tmp_path):

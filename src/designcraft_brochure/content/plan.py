@@ -38,6 +38,8 @@ class ConfirmedFacts:
     cover_image: str = ""
     logo_image: str = ""
     gallery_images: list[str] = field(default_factory=list)
+    template_links: list[str] = field(default_factory=list)
+    template_link_names: list[str] = field(default_factory=list)
 
 
 def build_plan(
@@ -127,6 +129,10 @@ def apply_confirmed(plan: BrochurePlan, source: str, facts: ConfirmedFacts) -> B
         plan.logo_image = facts.logo_image
     if facts.gallery_images:
         plan.gallery_images = [path for path in facts.gallery_images if path]
+    if facts.template_links:
+        plan.template_links = [path for path in facts.template_links if path]
+    if facts.template_link_names:
+        plan.template_link_names = [name for name in facts.template_link_names if name]
     return plan
 
 

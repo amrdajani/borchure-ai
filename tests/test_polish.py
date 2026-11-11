@@ -195,6 +195,41 @@ def test_extra_photos_fill_the_remaining_picture_frames(tmp_path):
     assert 10 not in placed
 
 
+def test_gallery_photos_leave_the_logo_frame(tmp_path):
+    (tmp_path / "cover.png").write_bytes(b"png")
+    (tmp_path / "one.jpeg").write_bytes(b"jpg")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "slots": [
+                    {
+                        "name": "travel with friends logo",
+                        "bounds": [282, 26, 510, 146],
+                        "file": "missing.png",
+                        "fit": "fitProportionally",
+                    }
+                ]
+            }
+        )
+    )
+    client = FakeDesignCraft(
+        {},
+        [
+            {"id": 7, "kind": "<image>", "bounds": [528, -7, 800, 622]},
+            {"id": 8, "kind": "<image>", "bounds": [282, 26, 510, 146]},
+            {"id": 9, "kind": "<image>", "bounds": [40, 200, 240, 400]},
+        ],
+    )
+    plan = _plan()
+    plan.cover_image = str(tmp_path / "cover.png")
+    plan.gallery_images = [str(tmp_path / "one.jpeg")]
+    polish_document(client, plan, assets_dir=tmp_path)
+    placed = {inner["frame"]: Path(inner["path"]).name for inner in client.commands("file.place")}
+    assert placed[7] == "cover.png"
+    assert placed[9] == "one.jpeg"
+    assert 8 not in placed
+
+
 def test_cover_line_names_the_host_from_the_approved_host_line(tmp_path):
     client = FakeDesignCraft(
         {100: "JOIN \nEvangelists \nROBBY & TRACEY MITCHELL IN"},
@@ -334,3 +369,37 @@ def test_without_a_tour_code_the_template_register_code_stays(tmp_path):
     client = FakeDesignCraft({}, [_picture(150, [36.0, 514.8, 104.9, 581.6])])
     polish_document(client, _plan({"role": "tour_code", "text": "Tour Code:"}), assets_dir=tmp_path, work_dir=tmp_path / "out")
     assert client.commands("file.place") == []
+
+
+def test_dropbox_links_fill_the_logo_and_icon_frames(tmp_path):
+    assets = tmp_path / "assets"
+    (assets / "brand").mkdir(parents=True)
+    (assets / "brand" / "facebook.png").write_bytes(b"fb")
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "slots": [
+                    {"name": "travel with friends logo", "bounds": [281.9, 26.0, 510.1, 146.5], "fit": "fitProportionally"},
+                    {"name": "facebook icon", "bounds": [285.9, 352.1, 319.0, 385.2], "fit": "fitProportionally"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    logo = tmp_path / "TWF-DIGITAL_ALT-WHITE_BLUE-RGB.png"
+    logo.write_bytes(b"logo")
+    client = FakeDesignCraft(
+        {},
+        [
+            {"id": 8, "kind": "<image>", "bounds": [282, 26, 510, 146]},
+            {"id": 9, "kind": "<image>", "bounds": [286, 352, 319, 385]},
+        ],
+    )
+    plan = _plan()
+    plan.template_links = [str(logo)]
+    plan.template_link_names = [logo.name, "facebook-logo@logotyp.us_2.psd"]
+    notes = polish_document(client, plan, assets_dir=assets)
+    placed = {inner["frame"]: Path(inner["path"]).name for inner in client.commands("file.place")}
+    assert placed[8] == logo.name
+    assert placed[9] == "facebook.png"
+    assert "placed logo" in notes and "placed facebook" in notes
