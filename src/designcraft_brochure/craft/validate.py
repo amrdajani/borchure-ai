@@ -144,9 +144,9 @@ def _open_command_matches_suffix(command: str, working_copy: Path) -> None:
     suffix = working_copy.suffix.lower()
     if suffix == ".idml" and command != "file.openIdml":
         raise SafetyError("An IDML working copy must be opened with file.openIdml.")
-    if suffix == ".designcraft" and command != "file.open":
+    if suffix in {".designcraft", ".indd"} and command != "file.open":
         raise SafetyError("A native working copy must be opened with file.open.")
-    if suffix not in {".idml", ".designcraft"}:
+    if suffix not in {".idml", ".designcraft", ".indd"}:
         raise SafetyError("DesignCraft cannot open this working copy.")
 
 
