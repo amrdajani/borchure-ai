@@ -210,10 +210,12 @@ def _slot_actions(observation: Observation, plan: BrochurePlan) -> list[Candidat
                 actions.append(_replace(story, airfare, "airfare"))
     panel = [block.text for block in backed if block.role == "host_panel"]
     if panel:
-        text = "\n".join(panel)
         for story in observation.stories:
             if _host_info_story(story):
-                actions.append(_replace(story, text, "contact"))
+                lines = list(panel)
+                if _plain(story).lower().startswith("host info") and lines and lines[0].strip().lower() == "contact info":
+                    lines[0] = "HOST INFO"
+                actions.append(_replace(story, "\n".join(lines), "contact"))
     return [item for item in actions if not _already_applied(_story_for(observation, item), item.params["text"])]
 
 
@@ -291,7 +293,7 @@ def _host_info_story(story: StoryView) -> bool:
     if _company_contact(story):
         return False
     text = _plain(story).lower()
-    if "contact info" in text or "host contact" in text:
+    if text.startswith("host info") or "contact info" in text or "host contact" in text:
         return True
     return "name:" in text and "email:" in text
 

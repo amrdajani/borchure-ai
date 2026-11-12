@@ -129,6 +129,44 @@ def test_price_date_and_contact_stories_use_proposal_facts(tmp_path):
     assert all(action.id != "request_human" for action in actions)
 
 
+def test_a_host_info_panel_always_receives_the_first_payment_date(tmp_path):
+    observation = Observation(
+        document_open=True,
+        stories=[
+            StoryView(
+                id=4,
+                preview="HOST INFO HOST: LISA ROMESBURG PHONE: (949) 510-3547 EMAIL: lisa@e-wings.net FINAL PAYMENT: 01/31/2025",
+                length=96,
+            ),
+        ],
+    )
+    plan = BrochurePlan(
+        template_id="fpsem",
+        blocks=[
+            CopyBlock(id="host_0", role="host_panel", text="CONTACT INFO", source_backed=True),
+            CopyBlock(id="host_1", role="host_panel", text="HOST: PASTOR SHERRY MORRIS", source_backed=True),
+            CopyBlock(id="host_2", role="host_panel", text="EMAIL: crownsministries17@yahoo.com", source_backed=True),
+            CopyBlock(id="host_3", role="host_panel", text="FIRST PAYMENT: Dec 9, 2025", source_backed=True),
+            CopyBlock(id="host_4", role="host_panel", text="FINAL PAYMENT: Jan 8, 2026", source_backed=True),
+        ],
+    )
+    actions = build_candidates(
+        observation,
+        plan,
+        working_copy=tmp_path / "working.idml",
+        native_path=tmp_path / "native.designcraft",
+        pdf_path=tmp_path / "out.pdf",
+        idml_export_path=tmp_path / "edited.idml",
+        preview_path=tmp_path / "page.png",
+        overwrite=False,
+    )
+    fills = {action.id: action.params["text"] for action in actions if action.id.startswith("fill_story_")}
+    assert fills["fill_story_4"] == (
+        "HOST INFO\nHOST: PASTOR SHERRY MORRIS\nEMAIL: crownsministries17@yahoo.com\n"
+        "FIRST PAYMENT: Dec 9, 2025\nFINAL PAYMENT: Jan 8, 2026"
+    )
+
+
 def test_a_truncated_host_panel_is_not_offered_again(tmp_path):
     written = (
         "CONTACT INFO\nHOST: PASTOR DANE WEAD\nEMAIL: dane@newlifelogan.com\n"

@@ -171,7 +171,8 @@ def _host_panel(doc: _Doc) -> list[str]:
     notes: list[str] = []
     for story in doc.stories():
         preview = str(story.get("preview") or "").strip()
-        if not preview.upper().startswith("CONTACT INFO"):
+        head = preview.upper()
+        if not (head.startswith("CONTACT INFO") or head.startswith("HOST INFO")):
             continue
         story_id = int(story["id"])
         text = str(doc.story(story_id).get("text") or "")
