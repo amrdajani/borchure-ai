@@ -79,7 +79,7 @@ def prepare_run(
                 message=f"Output already exists: {destination}",
                 working_copy=str(working),
             )
-    allowlist = {block.text for block in plan.blocks if block.source_backed}
+    allowlist = source_allowlist(plan.blocks)
     brief = proposal.model_dump(exclude={"raw_text"})
     return RunContext(
         goal=(
@@ -109,6 +109,17 @@ def prepare_run(
         control_host=settings.control_host,
         control_port=settings.control_port,
     )
+
+
+def source_allowlist(blocks) -> set[str]:
+    """Approved story lines, plus the template heading used in place of CONTACT INFO."""
+    approved = {block.text for block in blocks if block.source_backed}
+    if any(
+        block.source_backed and block.role == "host_panel" and block.text.strip().lower() == "contact info"
+        for block in blocks
+    ):
+        approved.add("HOST INFO")
+    return approved
 
 
 def _stage_template_links(working: Path, plan) -> None:

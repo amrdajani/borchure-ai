@@ -7,8 +7,9 @@ import socket
 import threading
 
 from designcraft_brochure.craft.client import ControlClient
+from designcraft_brochure.agent.prepare import source_allowlist
 from designcraft_brochure.craft.validate import CommandContext, validate_action
-from designcraft_brochure.models import CandidateAction
+from designcraft_brochure.models import CandidateAction, CopyBlock
 from designcraft_brochure.safety import SafetyError
 
 
@@ -31,6 +32,31 @@ def _context(tmp_path: Path) -> CommandContext:
         overwrite=False,
         story_ids={1},
         frame_ids={10},
+    )
+
+
+def test_host_info_heading_is_approved_when_the_panel_comes_from_the_proposal(tmp_path):
+    blocks = [
+        CopyBlock(id="host_0", role="host_panel", text="CONTACT INFO", source_backed=True),
+        CopyBlock(id="host_1", role="host_panel", text="HOST: PASTOR SHERRY MORRIS", source_backed=True),
+        CopyBlock(id="host_2", role="host_panel", text="FIRST PAYMENT: Dec 9, 2025", source_backed=True),
+    ]
+    context = _context(tmp_path)
+    context.allowlist = source_allowlist(blocks)
+    action = CandidateAction(
+        id="fill_story_1",
+        description="replace host panel",
+        risk="medium",
+        method="engine.execute",
+        command="story.setText",
+        params={
+            "story": 1,
+            "text": "HOST INFO\nHOST: PASTOR SHERRY MORRIS\nFIRST PAYMENT: Dec 9, 2025",
+        },
+    )
+    validate_action(action, context)
+    assert "HOST INFO" not in source_allowlist(
+        [CopyBlock(id="name", role="name", text="Pastor Sherry Morris", source_backed=True)]
     )
 
 
