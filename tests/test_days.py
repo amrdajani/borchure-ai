@@ -49,6 +49,29 @@ def test_a_swap_is_accepted_and_a_wrong_list_is_not():
             chat.validate_ops([{"op": "reorder_days", "order": order}], SNAPSHOT, image_count=0)
 
 
+def test_handed_days_become_one_itinerary_change():
+    ops = chat.validate_ops(
+        [
+            {
+                "op": "set_days",
+                "days": [
+                    {"day": 1, "title": "Depart the USA", "points": ["Transfer to your hotel"]},
+                    {"day": 2, "title": "Arrive in Istanbul", "points": ["Tour the Blue Mosque", "Visit the Hippodrome"]},
+                ],
+            }
+        ],
+        SNAPSHOT,
+        image_count=0,
+    )
+    assert ops[0]["days"][1]["points"] == ["Tour the Blue Mosque", "Visit the Hippodrome"]
+    with pytest.raises(chat.ChatError):
+        chat.validate_ops(
+            [{"op": "set_days", "days": [{"day": 9, "title": "Missing", "points": ["Nowhere"]}]}],
+            SNAPSHOT,
+            image_count=0,
+        )
+
+
 def test_no_days_means_a_clear_refusal():
     with pytest.raises(chat.ChatError, match="list of days"):
         chat.validate_ops([{"op": "reorder_days", "order": [1, 2]}], {"stories": [], "shapes": [], "pictures": [], "swatches": [], "days": []}, image_count=0)

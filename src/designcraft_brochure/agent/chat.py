@@ -34,7 +34,7 @@ MAX_OPS = 12
 MAX_STORIES = 70
 _HEX = re.compile(r"#[0-9a-fA-F]{6}")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
-OP_NAMES = {"replace_text", "set_text", "style_text", "fill_shape", "replace_picture", "tour_code", "move", "reorder_days", "undo"}
+OP_NAMES = {"replace_text", "set_text", "style_text", "fill_shape", "replace_picture", "tour_code", "move", "reorder_days", "set_days", "undo"}
 Completer = Callable[[Settings, list[dict]], str]
 
 
@@ -187,6 +187,7 @@ Operations. Use only ids from the lists you are given.
 - {"op":"tour_code","value":"HLMRS426"}  (sets the tour code bar and points the register QR code at that tour)
 - {"op":"move","frame":ID,"dx":NUMBER,"dy":NUMBER}  (points; right and down are positive; at most 200)
 - {"op":"reorder_days","order":[1,2,5,4,3,6,7,8,9,10]}  (the itinerary days. "order" lists the day numbers from top to bottom: that example swaps day 3 and day 5. The DAY labels stay 1, 2, 3 in order and each day's title and bullets move; the spacing is redone for you)
+- {"op":"set_days","days":[{"day":1,"title":"Depart the USA","points":["Transfer to your hotel","See the Blue Mosque"]}]}  (put the itinerary in. Use this once when the person gives the days, or asks for the days as points. "title" is the place or headline. "points" are the short activities, without bullets. Include every day they named. Do not use set_text for a day's title or points.)
 - {"op":"undo"}  (go back to before the last change)
 
 Rules:
@@ -310,6 +311,8 @@ def validate_ops(ops: list[dict], snapshot: dict, image_count: int) -> list[dict
             if not ok or sorted(order) != numbers:
                 raise ChatError(f"The days are {', '.join(map(str, numbers))}. Tell me which ones to swap or move.")
             clean.append({"op": name, "order": list(order)})
+        elif name == "set_days":
+            clean.append({"op": name, "days": _day_list(raw.get("days"), snapshot.get("days", []))})
         elif name == "move":
             frame, dx, dy = raw.get("frame"), raw.get("dx"), raw.get("dy")
             if frame not in movable:
@@ -318,6 +321,54 @@ def validate_ops(ops: list[dict], snapshot: dict, image_count: int) -> list[dict
                 raise ChatError("I can move things up to 200 points at a time.")
             clean.append({"op": name, "frame": frame, "dx": float(dx), "dy": float(dy)})
     return clean
+
+
+def _day_list(value: Any, known: list[dict]) -> list[dict]:
+    numbers = {item["day"] for item in known}
+    if not numbers:
+        raise ChatError("I can't find a list of days in this brochure.")
+    if not isinstance(value, list) or not value:
+        raise ChatError("Tell me each day: the title and the points under it.")
+    cleaned: list[dict] = []
+    seen: set[int] = set()
+    listed = ", ".join(str(number) for number in sorted(numbers))
+    for item in value:
+        if not isinstance(item, dict):
+            raise ChatError(f"The days in this brochure are {listed}.")
+        number = item.get("day")
+        if not isinstance(number, int) or isinstance(number, bool) or number not in numbers or number in seen:
+            raise ChatError(f"The days in this brochure are {listed}. Name each one you want to change.")
+        points = item.get("points")
+        if not isinstance(points, list) or not 1 <= len(points) <= 8:
+            raise ChatError(f"Day {number} needs between 1 and 8 points.")
+        seen.add(number)
+        cleaned.append(
+            {
+                "day": number,
+                "title": _text(item.get("title"), 80),
+                "points": [_text(point, 90) for point in points],
+            }
+        )
+    return cleaned
+
+
+def _apply_days(doc: Any, client: Any, requested: list[dict]) -> list[str]:
+    from designcraft_brochure.content.itinerary import format_day_points, format_day_title
+
+    found = {block["day"]: block for block in days.find_days(take_snapshot(client)["stories"])}
+    notes: list[str] = []
+    for item in requested:
+        block = found.get(item["day"])
+        if block is None:
+            continue
+        doc.run("story.setText", {"story": block["title"]["story"], "text": format_day_title(item["title"])})
+        if block["body"] is not None:
+            doc.run(
+                "story.setText",
+                {"story": block["body"]["story"], "text": format_day_points("\n".join(item["points"]))},
+            )
+        notes.append(f"day {item['day']} set")
+    return notes
 
 
 def _story(raw: dict, stories: dict[int, dict]) -> int:
@@ -419,6 +470,8 @@ def apply_ops(
                 notes.extend(days.reorder_days(doc, take_snapshot(client), op["order"]))
             except days.DaysError as exc:
                 raise ChatError(str(exc)) from exc
+        elif kind == "set_days":
+            notes.extend(_apply_days(doc, client, op["days"]))
         elif kind == "move":
             doc.run("transform.move", {"dx": op["dx"], "dy": op["dy"], "ids": [op["frame"]]})
             notes.append("moved")

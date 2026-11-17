@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+from designcraft_brochure.content.itinerary import format_day_points, format_day_title, tour_photo_paths
 from designcraft_brochure.craft.assets import (
     default_assets_dir,
     match_frames,
@@ -60,6 +61,7 @@ def polish_document(
         ("price bars", lambda doc: _bars(doc, plan)),
         ("cover line", lambda doc: _cover_line(doc, plan)),
         ("cover title", lambda doc: _cover_title(doc, plan)),
+        ("itinerary", lambda doc: _itinerary(doc, plan)),
         ("headline width", lambda doc: _headline_width(doc)),
     ]
     steps.append(("template pictures", lambda doc: _place_template_links(doc, plan, assets_dir)))
@@ -68,6 +70,7 @@ def polish_document(
     steps.extend(
         [
             ("chosen pictures", lambda doc: _place_uploads(doc, plan, assets_dir, keep_existing=preserve_pictures)),
+            ("proposal photos", lambda doc: _place_proposal_photos(doc, plan, assets_dir)),
             ("register code", lambda doc: _register_qr(doc, plan, work_dir)),
         ]
     )
@@ -376,6 +379,95 @@ def _cover_title(doc: _Doc, plan: BrochurePlan) -> list[str]:
     if keep:
         doc.style(story_id, 0, length, keep, {"align": "left"})
     return [f"cover title set to {title}"]
+
+
+def _itinerary(doc: _Doc, plan: BrochurePlan) -> list[str]:
+    """Replace each template day with the same day's title and details from the proposal."""
+    titles = {int(block.id.removeprefix("day_title_")): block.text for block in plan.blocks if block.role == "day_title" and block.id.startswith("day_title_")}
+    bodies = {int(block.id.removeprefix("day_body_")): block.text for block in plan.blocks if block.role == "day_body" and block.id.startswith("day_body_")}
+    if not titles:
+        return []
+    from designcraft_brochure.agent import days
+
+    found = days.find_days(_itinerary_stories(doc))
+    notes: list[str] = []
+    for block in found:
+        number = block["day"]
+        title = titles.get(number)
+        written_title = format_day_title(title) if title else ""
+        if written_title and " ".join(block["title"]["text"].split()) != written_title:
+            doc.run("story.setText", {"story": block["title"]["story"], "text": written_title})
+            notes.append(f"day {number} title")
+        body = bodies.get(number)
+        written_body = format_day_points(body) if body else ""
+        if written_body and block["body"] is not None and block["body"]["text"].strip() != written_body:
+            doc.run("story.setText", {"story": block["body"]["story"], "text": written_body})
+            notes.append(f"day {number} details")
+    return notes
+
+
+def _itinerary_stories(doc: _Doc) -> list[dict]:
+    frames: dict[int, dict] = {}
+    for page_index, spread in enumerate(doc.info.get("spreads", [])):
+        for item in _walk_items(spread):
+            frames[int(item["id"])] = {**item, "page": page_index + 1}
+    stories: list[dict] = []
+    for story in doc.stories():
+        story_frames = story.get("frames") or []
+        if not story_frames:
+            continue
+        frame = frames.get(int(story_frames[0]))
+        if frame is None:
+            continue
+        text = str(doc.story(int(story["id"])).get("text") or story.get("preview") or "")
+        stories.append(
+            {
+                "story": int(story["id"]),
+                "frame": int(frame["id"]),
+                "page": frame["page"],
+                "bounds": frame["bounds"],
+                "text": text,
+            }
+        )
+    return stories
+
+
+def _walk_items(node: Any) -> list[dict]:
+    found: list[dict] = []
+    if isinstance(node, dict):
+        if "id" in node and "bounds" in node:
+            found.append(node)
+        for value in node.values():
+            found.extend(_walk_items(value))
+    elif isinstance(node, list):
+        for value in node:
+            found.extend(_walk_items(value))
+    return found
+
+
+def _place_proposal_photos(doc: _Doc, plan: BrochurePlan, assets_dir: Path | None) -> list[str]:
+    """Put the proposal's tour photos into the template photo frames when none were chosen."""
+    if plan.gallery_images or assets_dir is None:
+        return []
+    photos = tour_photo_paths(plan.image_paths)
+    if not photos:
+        return []
+    slots = [slot for slot in slot_layouts(assets_dir) if "photo" in slot["name"].lower()]
+    if plan.cover_image:
+        slots = [slot for slot in slots if "cover" not in slot["name"].lower()]
+    frames = picture_frames(doc.inspect())
+    notes: list[str] = []
+    used: set[int] = set()
+    for slot, photo in zip(slots, photos):
+        pair = match_frames([slot], [frame for frame in frames if frame["id"] not in used])
+        if not pair:
+            continue
+        frame_id = int(pair[0][1]["id"])
+        doc.run("file.place", {"path": str(Path(photo).resolve()), "frame": frame_id})
+        doc.run("object.fit", {"mode": slot["fit"], "ids": [frame_id]})
+        used.add(frame_id)
+        notes.append(f"placed proposal photo in {slot['name']}")
+    return notes
 
 
 _RASTER = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".gif"}

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from designcraft_brochure.config import Settings
 from designcraft_brochure.content.anthropic import messages as anthropic_messages
+from designcraft_brochure.content.itinerary import parse_itinerary
 from designcraft_brochure.content.openai_compat import chat_completion
 from designcraft_brochure.jev.brain import Brain
 from designcraft_brochure.jev.questions import support_questions
@@ -100,6 +101,10 @@ def build_plan(
     airfare = airfare_line(proposal.raw_text)
     if airfare:
         kept.append(CopyBlock(id="airfare", role="airfare", text=airfare, source_backed=True))
+    for day in parse_itinerary(proposal.raw_text):
+        kept.append(CopyBlock(id=f"day_title_{day.number}", role="day_title", text=day.title, source_backed=True))
+        if day.body:
+            kept.append(CopyBlock(id=f"day_body_{day.number}", role="day_body", text=day.body, source_backed=True))
     missing = list(proposal.missing)
     if not kept:
         missing.append("No source-backed brochure text was available.")

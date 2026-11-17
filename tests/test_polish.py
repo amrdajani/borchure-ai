@@ -403,3 +403,30 @@ def test_dropbox_links_fill_the_logo_and_icon_frames(tmp_path):
     assert placed[8] == logo.name
     assert placed[9] == "facebook.png"
     assert "placed logo" in notes and "placed facebook" in notes
+
+
+def test_proposal_days_replace_the_template_itinerary(tmp_path):
+    frames = []
+    stories = {}
+    for number in range(1, 4):
+        top = 100 + (number - 1) * 60
+        label, title, body = number * 10, number * 10 + 1, number * 10 + 2
+        frames.append(_text_frame(label, label, [400, top, 460, top + 14]))
+        frames.append(_text_frame(title, title, [470, top, 600, top + 14]))
+        frames.append(_text_frame(body, body, [470, top + 16, 600, top + 46]))
+        stories[label] = f"DAY {number}"
+        stories[title] = f"OLD TITLE {number}"
+        stories[body] = f"OLD DETAILS {number}"
+    client = FakeDesignCraft(stories, frames)
+    plan = BrochurePlan(
+        template_id="t",
+        blocks=[
+            CopyBlock(id="day_title_1", role="day_title", text="Fly to Tel Aviv", source_backed=True),
+            CopyBlock(id="day_body_1", role="day_body", text="Depart Newark in the evening.", source_backed=True),
+        ],
+    )
+    notes = polish_document(client, plan, assets_dir=tmp_path)
+    assert client.texts[11] == "FLY TO TEL AVIV"
+    assert client.texts[12] == "•\tDepart Newark in the evening."
+    assert client.texts[21] == "OLD TITLE 2"
+    assert "day 1 title" in notes and "day 1 details" in notes
