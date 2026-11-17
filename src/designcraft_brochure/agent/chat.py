@@ -187,7 +187,7 @@ Operations. Use only ids from the lists you are given.
 - {"op":"tour_code","value":"HLMRS426"}  (sets the tour code bar and points the register QR code at that tour)
 - {"op":"move","frame":ID,"dx":NUMBER,"dy":NUMBER}  (points; right and down are positive; at most 200)
 - {"op":"reorder_days","order":[1,2,5,4,3,6,7,8,9,10]}  (the itinerary days. "order" lists the day numbers from top to bottom: that example swaps day 3 and day 5. The DAY labels stay 1, 2, 3 in order and each day's title and bullets move; the spacing is redone for you)
-- {"op":"set_days","days":[{"day":1,"title":"Depart the USA","points":["Transfer to your hotel","See the Blue Mosque"]}]}  (put the itinerary in. Use this once when the person gives the days, or asks for the days as points. "title" is the place or headline. "points" are the short activities, without bullets. Include every day they named. Do not use set_text for a day's title or points.)
+- {"op":"set_days","days":[{"day":1,"title":"Depart the USA","points":["Transfer to your hotel","See the Blue Mosque"]}]}  (put the itinerary in. Use this once when the person gives the days, or asks for the days as points. "title" is a short place or activity that fits on one line. Each point is one short activity, without bullets. Include every day they named. Do not use set_text for a day's title or points.)
 - {"op":"undo"}  (go back to before the last change)
 
 Rules:

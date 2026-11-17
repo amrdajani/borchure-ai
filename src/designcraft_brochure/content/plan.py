@@ -13,10 +13,10 @@ from dataclasses import dataclass, field
 
 from designcraft_brochure.config import Settings
 from designcraft_brochure.content.anthropic import messages as anthropic_messages
-from designcraft_brochure.content.itinerary import parse_itinerary
+from designcraft_brochure.content.itinerary import parse_itinerary, present_day
 from designcraft_brochure.content.openai_compat import chat_completion
-from designcraft_brochure.jev.brain import Brain
-from designcraft_brochure.jev.questions import support_questions
+from designcraft_brochure.jev.brain import Brain, BrainError
+from designcraft_brochure.jev.questions import day_fit_questions, support_questions
 from designcraft_brochure.models import BrochurePlan, CopyBlock, Proposal, TemplateInfo
 from designcraft_brochure.safety import clean_typed_text, is_suspicious, unsupported_facts
 
@@ -101,10 +101,10 @@ def build_plan(
     airfare = airfare_line(proposal.raw_text)
     if airfare:
         kept.append(CopyBlock(id="airfare", role="airfare", text=airfare, source_backed=True))
-    for day in parse_itinerary(proposal.raw_text):
-        kept.append(CopyBlock(id=f"day_title_{day.number}", role="day_title", text=day.title, source_backed=True))
-        if day.body:
-            kept.append(CopyBlock(id=f"day_body_{day.number}", role="day_body", text=day.body, source_backed=True))
+    for number, title, points in _checked_days(proposal.raw_text, brain):
+        kept.append(CopyBlock(id=f"day_title_{number}", role="day_title", text=title, source_backed=True))
+        if points:
+            kept.append(CopyBlock(id=f"day_body_{number}", role="day_body", text=points, source_backed=True))
     missing = list(proposal.missing)
     if not kept:
         missing.append("No source-backed brochure text was available.")
@@ -117,6 +117,37 @@ def build_plan(
     if facts is not None:
         apply_confirmed(plan, proposal.raw_text, facts)
     return plan
+
+
+def _checked_days(source: str, brain: Brain) -> list[tuple[int, str, str]]:
+    """Fit each day to the frame, then let Jev send back any day that is still too long."""
+    parsed: list[tuple[int, str, str, str, str]] = []
+    for day in parse_itinerary(source):
+        title, points = present_day(day.title, day.body)
+        if title:
+            parsed.append((day.number, day.title, day.body, title, points))
+    if not parsed:
+        return []
+    shown = [(number, title, points) for number, _raw_title, _raw_body, title, points in parsed]
+    try:
+        judgment = brain.judge(
+            {"source": source[:24000], "days": [{"day": number, "title": title, "points": points} for number, title, points in shown]},
+            day_fit_questions(shown),
+        )
+    except BrainError:
+        return [(number, title, points) for number, title, points in shown]
+    checked: list[tuple[int, str, str]] = []
+    for number, raw_title, raw_body, title, points in parsed:
+        try:
+            choice = judgment.choice(f"day_{number}").choice
+        except BrainError:
+            choice = "ready"
+        if choice == "tighten":
+            shorter, shorter_points = present_day(raw_title, raw_body, tight=True)
+            if shorter:
+                title, points = shorter, shorter_points
+        checked.append((number, title, points))
+    return checked
 
 
 def apply_confirmed(plan: BrochurePlan, source: str, facts: ConfirmedFacts) -> BrochurePlan:

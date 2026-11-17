@@ -84,6 +84,8 @@ def answering_brain(state, questions) -> Judgment:
     for key in questions:
         if key.startswith("support_"):
             nouls[key] = 0.1
+        if key.startswith("day_"):
+            choices[key] = "ready"
     return scripted_judgment(questions, choices=choices, nouls=nouls, confidence=0.95)
 
 

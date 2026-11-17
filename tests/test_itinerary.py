@@ -42,6 +42,56 @@ def test_days_are_written_as_capital_titles_and_points():
     )
 
 
+def test_a_long_day_is_shortened_so_it_fits_the_frame():
+    from designcraft_brochure.content.itinerary import format_day_points, format_day_title
+
+    assert format_day_title("Have the chance for an optional baptism (Mark 1:5)") == "BAPTISM (MARK 1:5)"
+    assert format_day_title("6; Matt. 4). Travel to Jerusalem") == "TRAVEL TO JERUSALEM"
+    assert format_day_title("Tomb (John 19:40).") == "TOMB (JOHN 19:40)"
+    assert format_day_title('Cross." Visit the Church of the Holy Sepulchre') == "HOLY SEPULCHRE"
+    assert len(format_day_title("Have the chance for an optional baptism (Mark 1:5)")) <= 26
+    points = format_day_points(
+        "You will be landing at Ben Gurion Airport in Tel Aviv. "
+        "Afterwards we board our motor coach and go to our hotel on the beautiful"
+    )
+    assert points == "•\tBen Gurion Airport in Tel Aviv"
+    assert format_day_points("• • Visit the Israel Museum") == "•\tVisit the Israel Museum"
+
+
+def test_jev_asks_for_a_shorter_day_when_the_line_still_does_not_fit():
+    from designcraft_brochure.config import Settings
+    from designcraft_brochure.content.plan import build_plan
+    from designcraft_brochure.jev.brain import scripted_judgment
+    from designcraft_brochure.models import Proposal, TemplateInfo
+
+    source = "Day 1: Travel to Jerusalem\nWalk the Old City.\nDay 2: Ephesus\nDock in Turkey."
+
+    def judge(state, questions):
+        choices = {}
+        nouls = {}
+        for key, question in questions.items():
+            if question.get("type") == "noul":
+                nouls[key] = 0.9
+            elif key == "day_1":
+                choices[key] = "tighten"
+            else:
+                choices[key] = next(iter(question["criteria"]))
+        return scripted_judgment(questions, choices=choices, nouls=nouls)
+
+    plan = build_plan(
+        Proposal(source_path="proposal.pdf", raw_text=source),
+        TemplateInfo(id="t", path="t.indd", category="travel", suffix=".indd"),
+        type("Brain", (), {"judge": staticmethod(judge)})(),
+        Settings(),
+    )
+    titles = {block.id: block.text for block in plan.blocks if block.role == "day_title"}
+    assert titles["day_title_1"] == "JERUSALEM"
+    assert titles["day_title_2"] == "EPHESUS"
+    bodies = {block.id: block.text for block in plan.blocks if block.role == "day_body"}
+    assert bodies["day_body_1"] == "•\tWalk the Old City."
+    assert bodies["day_body_2"] == "•\tDock in Turkey."
+
+
 def test_only_large_proposal_pictures_are_tour_photos(tmp_path: Path):
     large = tmp_path / "large.png"
     small = tmp_path / "small.png"

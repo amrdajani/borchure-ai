@@ -101,6 +101,30 @@ def template_questions(templates: list[dict]) -> dict:
     }
 
 
+def day_fit_questions(days: list[tuple[int, str, str]]) -> dict:
+    """Jev checks the day copy that will be printed, before it goes into the frame."""
+    questions = {}
+    for number, title, points in days:
+        shown = points if points else "(no points, title only)"
+        questions[f"day_{number}"] = {
+            "type": "choice",
+            "instructions": (
+                f"Day {number} will be printed in a fixed frame: one capital title line, then at most three short points. "
+                f"Title: {title}. Points: {shown}. "
+                "The proposal text is in state.source and this day is in state.days. "
+                "Choose ready when the title is a short place or activity that fits on one line, "
+                "each point is one short activity, and every word is already in the proposal. "
+                "Choose tighten when the title would wrap into the details, a point is still a cut-off sentence, "
+                "or the lines would run into the next day."
+            ),
+            "criteria": {
+                "ready": "This day will fit its frame and reads as a finished brochure day.",
+                "tighten": "This day is still too long or cut off for the day frame.",
+            },
+        }
+    return questions
+
+
 def support_questions(blocks: list[tuple[str, str]]) -> dict:
     questions = {}
     for block_id, text in blocks:
